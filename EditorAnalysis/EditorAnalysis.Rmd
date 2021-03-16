@@ -37,6 +37,7 @@ params:
     - yes
     - no
 ---
+
 ```{r label=setup, include=FALSE}
 library(knitr)
 ## options for this document
@@ -58,6 +59,7 @@ if (doc_is_pdf) {
 # works in knit, but not in other environments
 try(knitr::dep_auto())
 ```
+
 ```{r r-setup}
 # core libraries for tidy data science in R
 library(tidyverse)
@@ -67,6 +69,7 @@ if (doc_debug) {
 }
 library(gt)
 ```
+
 ```{r fetch-data, include=FALSE}
 library("R.utils")
 #library("RSQLite")
@@ -114,6 +117,7 @@ if (doc_refresh_data) {
 doaj_raw.tbl <- read_csv(paste(db.name,".gz",sep=""))
 rm(db.name)
 ```
+
 ```{r data-clean}
 library("rlang")
 
@@ -138,44 +142,52 @@ editors.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_al
 editors.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license","LCC Codes"), by="issn")
 ```
 
-
 # Abstract
+
 # Introduction
+
 # Materials and Methods
+
 ## Gender Imputation
 
+Making scholarship more inclusive requires making the characteristics of those participating visible. Because no systematic public data on self-reported author characteristics exists, however, research on participation in scholarly publications must use bibliometric methods to impute gender from author names. [See, for example, @lariviere2013bibliometrics] To impute the geneder of editors we apply a method that is commonly used in scientometric analysis and which is based on analysis of historical censuses [@blevins2015jane] to impute gender based on author names. We then use this imputation to explore the inclusion of works authored by men and women over time.[^1]
 
-Making scholarship more inclusive requires making the characteristics of those participating visible. Because no systematic public data on self-reported author characteristics exists, however, research on participation in scholarly publications must use bibliometric methods to impute gender from author names. [See, for example, @lariviere2013bibliometrics] To impute the geneder of editors we apply a method that is commonly used in scientometric analysis and which is based on analysis of historical censuses [@blevins2015jane] to impute gender based on author names. We then use this imputation to explore the inclusion of works authored by men and women over time.[^3]
+[^1]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
 
-[^3]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
-```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
-library(gender)
-library(genderdata)
-library(humaniformat) 
-gender_meth <- "ipums"
+    ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
+    library(gender)
+    library(genderdata)
+    library(humaniformat) 
+    gender_meth <- "ipums"
 
-doab_df %<>% mutate(LS_NM_AUTHORS=str_split(`Authors`,";"))
+    doab_df %<>% mutate(LS_NM_AUTHORS=str_split(`Authors`,";"))
 
-# parse_names fails on empty strings, wrap it# gender can fail on genderize method
-safe_first_name <- possibly(first_name, otherwise="")
-safe_format_reverse <- possibly(format_reverse, otherwise="")
-safe_gender <- possibly(gender, otherwise=list(gender=""))
+    # parse_names fails on empty strings, wrap it# gender can fail on genderize method
+    safe_first_name <- possibly(first_name, otherwise="")
+    safe_format_reverse <- possibly(format_reverse, otherwise="")
+    safe_gender <- possibly(gender, otherwise=list(gender=""))
 
-doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHORS_R = list(safe_format_reverse (str_squish(`LS_NM_AUTHORS`))))
+    doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHORS_R = list(safe_format_reverse (str_squish(`LS_NM_AUTHORS`))))
 
-doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHOR_FIRST=list(safe_first_name(`LS_NM_AUTHORS_R`)))
+    doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHOR_FIRST=list(safe_first_name(`LS_NM_AUTHORS_R`)))
 
-doab_df %<>% ungroup() %>% rowwise() %>% mutate(LS_CAT_GENDERS = list(safe_gender(`LS_NM_AUTHOR_FIRST`,method=gender_meth)[["gender"]]))
+    doab_df %<>% ungroup() %>% rowwise() %>% mutate(LS_CAT_GENDERS = list(safe_gender(`LS_NM_AUTHOR_FIRST`,method=gender_meth)[["gender"]]))
 
-doab_df %<>% rowwise() %>% mutate(
-  N_GENDER_MALE=sum(LS_CAT_GENDERS=="male",na.rm=TRUE),  N_GENDER_FEMALE=sum(LS_CAT_GENDERS=="female",na.rm=TRUE),
-  )
-```
-
+    doab_df %<>% rowwise() %>% mutate(
+      N_GENDER_MALE=sum(LS_CAT_GENDERS=="male",na.rm=TRUE),  N_GENDER_FEMALE=sum(LS_CAT_GENDERS=="female",na.rm=TRUE),
+      )
+    ```
 
 # Results
-- Journal: field, OA status
-- Authors: 
-# Discussion
-# References {#references .unnumbered}
+
+-   Journal: field, OA status
+-   Authors: \# Discussion \# References {\#references .unnumbered}
+
+# Appendices
+
+Journals per publisher, and missing ISSN
+
+```{r}
+ editors.tbl %>% group_by(journal) %>% slice_head(n=1) %>% group_by(publisher) %>% summarize(n=n(),miss=sum(is.na(issn))) %>% gt()
+```
 
