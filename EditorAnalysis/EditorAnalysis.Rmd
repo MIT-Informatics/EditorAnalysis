@@ -154,28 +154,28 @@ Making scholarship more inclusive requires making the characteristics of those p
 
 [^1]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
 
-    ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
-    library(gender)
-    library(genderdata)
-    library(humaniformat) 
-    gender_meth <- "ipums"
+```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
+library(gender)
+library(genderdata) # install using devtools::install_github("lmullen/genderdata")
+library(humaniformat) 
+gender_meth <- "ipums"
 
-    doab_df %<>% mutate(LS_NM_AUTHORS=str_split(`Authors`,";"))
+editors.tbl %<>% rowwise() %>% mutate(NM_EDITOR=editor)
 
-    # parse_names fails on empty strings, wrap it# gender can fail on genderize method
-    safe_first_name <- possibly(first_name, otherwise="")
-    safe_format_reverse <- possibly(format_reverse, otherwise="")
-    safe_gender <- possibly(gender, otherwise=list(gender=""))
 
-    doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHORS_R = list(safe_format_reverse (str_squish(`LS_NM_AUTHORS`))))
+# parse_names fails on empty strings, wrap it# gender can fail on genderize method
+safe_first_name <- possibly(first_name, otherwise="")
+safe_format_reverse <- possibly(format_reverse, otherwise="")
+safe_gender <- possibly(gender, otherwise=list(gender=""))
 
-    doab_df %<>% rowwise() %>% mutate(LS_NM_AUTHOR_FIRST=list(safe_first_name(`LS_NM_AUTHORS_R`)))
+editors.tbl %<>% rowwise() %>% mutate(LS_NM_EDITOR=`editor`)
+editors.tbl %<>% rowwise() %>% mutate(LS_NM_EDITOR_FIRST=safe_first_name(`LS_NM_EDITOR`))
 
-    doab_df %<>% ungroup() %>% rowwise() %>% mutate(LS_CAT_GENDERS = list(safe_gender(`LS_NM_AUTHOR_FIRST`,method=gender_meth)[["gender"]]))
-
-    doab_df %<>% rowwise() %>% mutate(
-      N_GENDER_MALE=sum(LS_CAT_GENDERS=="male",na.rm=TRUE),  N_GENDER_FEMALE=sum(LS_CAT_GENDERS=="female",na.rm=TRUE),
-      )
+ editors.tbl %>% count(LS_NM_EDITOR_FIRST) %>% arrange(desc(n))
+ 
+editors.tbl %<>% rowwise() %>%
+  mutate( LS_NM_EDITOR_GENDER = 
+            safe_gender(`LS_NM_AUTHOR_FIRST`,method=gender_meth)[["gender"]])
     ```
 
 # Results
