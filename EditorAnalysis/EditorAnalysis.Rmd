@@ -1,0 +1,115 @@
+---
+title: Title of submission to PLOS journal
+author:
+  - name: Alice Anonymous
+    email: alice@example.com
+    affiliation: Some Institute of Technology
+    corresponding: alice@example.com
+  - name: Bob Security
+    email: bob@example.com
+    affiliation: 
+      - Another University
+      - Some Institute of Technology
+address:
+  - code: Some Institute of Technology
+    address: Department 1, Street, City, State, Zip
+  - code: Another University
+    address: Department 2, Street, City, State, Zip
+abstract: |
+  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
+  
+author_summary: |
+  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
+
+bibliography: mybibfile.bib
+output: rticles::plos_article
+csl: plos.csl
+
+params:
+  doc_refresh_data:
+    value: yes
+    choices:
+    - yes
+    - no
+  doc_debug:
+    value: no
+    choices:
+    - yes
+    - no
+---
+```{r label=setup, include=FALSE}
+library(knitr)
+## options for this document
+doc_debug <- params$doc_debug
+doc_refresh_data <- params$doc_refresh_data
+knitr::opts_chunk$set("message" = doc_debug)
+knitr::opts_chunk$set("warning" = doc_debug)
+knitr::opts_chunk$set("tidy" = FALSE) # already tidyed using stylr
+knitr::opts_chunk$set(autodep=TRUE)
+
+## check for webshot if pdf output
+doc_is_pdf <- 
+  try (("pdf_document" %in% rmarkdown::all_output_formats(knitr::current_input())), silent=TRUE)
+doc_is_pdf <- (doc_is_pdf == TRUE)
+if (doc_is_pdf) {
+  require("webshot")
+  webshot::install_phantomjs()
+}
+# works in knit, but not in other environments
+try(knitr::dep_auto())
+```
+```{r r-setup}
+# core libraries for tidy data science in R
+library(tidyverse)
+library(magrittr)
+if (doc_debug) {
+  require(tidylog)
+}
+library(gt)
+```
+```{r fetch-data, include=FALSE}
+library("R.utils")
+#library("RSQLite")
+#library("DBI")
+#library("jsonlite")
+#library("dbplyr")
+db.name <- "openeditors_combined.csv"
+if (FALSE & doc_refresh_data) {
+  
+   uris <- c(editor1.csv ="https://raw.githubusercontent.com/andreaspacher/openeditors/main/Output/editors1.csv",
+            editor2.scv= "https://raw.githubusercontent.com/andreaspacher/openeditors/main/Output/editors2.csv")
+   
+   tmp.tbl <- NULL
+   
+   tmpfile <- tempfile(fileext=".csv")
+
+   for (j in 1:length(uris)) {
+     i <- uris[j]
+     download.file(i,names(i))
+     gEnc <- guess_encoding(names(i),n_max=-1)[[1]] # originally tried alternative encodings such as windows-1250, latin1, UTF8, "ISO-8859-1" as encodings,
+     tmp.tbl %<>% bind_rows(read_csv(names(i),  locale = readr::locale(encoding = gEnc)))
+   }
+   write_csv(tmp.tbl,db.name)
+   gzip(db.name)
+}
+
+editors_raw.tbl <- read_csv(paste(db.name,".gz",sep=""))
+
+```
+```{r data-clean}
+library("rlang")
+editors.tbl <- editors_raw.tbl
+
+editors.tbl %<>% select(-X1) # strip unnamed rowids in data 
+editors.tbl %<>% mutate(across(-c("issn","date","url"),as_utf8_character)) # clean unicode sequences
+editors.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_all(x,'\\<.*\\>',''))) # strip unresolved escapes (TODO: convert latin-1 escape sequences to Unicode rather than strip them)
+```
+
+
+# Abstract
+# Introduction
+# Materials and Methods
+# Results
+# Discussion
+# References {#references .unnumbered}
+
