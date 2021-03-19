@@ -60,7 +60,7 @@ if (doc_is_pdf) {
 try(knitr::dep_auto())
 ```
 
-```{r r-setup}
+```{r r-setup, include=FALSE}
 # core libraries for tidy data science in R
 library(tidyverse)
 library(magrittr)
@@ -69,14 +69,19 @@ if (doc_debug) {
 }
 library(gt)
 ```
+# Abstract
 
+# Introduction
+
+# Data
+* Data comes from three sources: 
+** DOAJ
+** OpenEditors
+** Australian ERA journal evaluation list
 ```{r fetch-data, include=FALSE}
 library("R.utils")
 library("readxl")
-#library("RSQLite")
-#library("DBI")
-#library("jsonlite")
-#library("dbplyr")
+
 
 ###
 ### OpenEditors Data
@@ -132,8 +137,11 @@ era_raw.tbl <- read_excel(db.name,2)
 fieldcode_raw.tbl <- read_excel(db.name,3)
 rm(db.name)
 ```
-
-```{r data-clean}
+* OpenEditors Data is cleaned for
+** character sets
+** white space
+** missing ISSN in editors -- recovered by matching to other databases on publisher and title. 
+```{r data-clean, include=FALSE}
 library("rlang")
 
 ### DOAJ
@@ -147,29 +155,149 @@ doaj.tbl %<>% pivot_longer(cols=c("Journal ISSN (print version)","Journal EISSN 
 ### normalize by issn, pack subject field
 era.tbl <- era_raw.tbl
 era.tbl %<>% select(-c(starts_with("ERA"), ends_with("Name"), starts_with("Foreign")))
-era.tbl %<>% unite("Subjects",starts_with("FoR"),sep=",",na.rm=TRUE) %>%
-  pivot_longer(starts_with("ISSN"), names_to = NULL, values_to = "ISSN", values_drop_na = TRUE )
+era.tbl %<>% unite("subjects",starts_with("FoR"),sep=",",na.rm=TRUE) %>%
+  pivot_longer(starts_with("ISSN"), names_to = NULL, values_to = "issn", values_drop_na = TRUE ) %>% rename(journal="Title")
 
 
 ###
 ### Editors cleanup
-editors.tbl <- editors_raw.tbl
+editors_clean.tbl <- editors_raw.tbl
+editors_clean.tbl %<>% select(-X1) 
+editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),as_utf8_character)) # clean unicode sequences
+editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_all(x,'\\<.*\\>',''))) # strip unresolved escapes (TODO: convert latin-1 escape sequences to Unicode rather than strip them)
+editors_clean.tbl %<>%
+mutate(across(-c("issn","date","url"),str_squish)) # clean unicode sequences
 
-editors.tbl %<>% select(-X1) # strip unnamed rowids in data 
-editors.tbl %<>% mutate(across(-c("issn","date","url"),as_utf8_character)) # clean unicode sequences
-editors.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_all(x,'\\<.*\\>',''))) # strip unresolved escapes (TODO: convert latin-1 escape sequences to Unicode rather than strip them)
-# TODO: Some journals missing ISSN code, match by name & publisher
+# Some journals missing ISSN code, match against other sources by name & publisher to find ISSN
+noissn.tbl <- editors_clean.tbl %>% filter(is.na(issn)) %>% select(c("journal","publisher"))  %>% group_by(journal)  
 
+duplicate_journals <- noissn.tbl %>% group_by(journal,publisher) %>% count() %>% group_by(journal) %>% count() %>% filter(n>1)
+
+if (nrow(duplicate_journals>0))  { 
+  warning("duplicate journal names")
+}
+
+noissn.tbl %<>% group_by(journal) %>% slice_head(n=1)
+
+noissn.tbl %<>% left_join( era.tbl %>% select("issn","journal"), by=c("journal")) %>% filter(!is.na(issn)) 
+
+# TODO: extend by using fuzzy joins on the ones that are still missing
+
+noissn.tbl %<>% group_by(`journal`) %>% slice_head(n=1)  %>% select("publisher","issn")
+
+editors_clean.tbl %<>% left_join(noissn.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE)
+rm(noissn.tbl,duplicate_journals)
+if (!doc_debug) {
+  rm("editors_raw.tbl")
+}
+```
+.** Of XXX total journals in OpenEditors, YYY are matched
+
+* Data merged by ISSN 
+** Subject fields from era
+** Open license from doaj
+```{r data-merge}
 ### Join editors with journal information
-editors.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license","LCC Codes"), by="issn")
+editors_join.tbl <- editors_clean.tbl
+if (!doc_debug) {
+  rm("editors_clean.tbl")
+}
+editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by="issn") %>% rename(license="Journal license")  %>% rowwise() %>%  mutate(license = ifelse(is.na(license),"none",license),  IND_openlicense=(license!="none"))
+
+editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
+```
+* Fields parsed
+- first name:  extracted from full name (using humaniformat), with preprocessing to remove titled ("Dr.","Professor.")
+- county - parsed from affiliation, validated with gazetteer
+```{r data-parse-names}
+### extract given names for gender analysis
+library(humaniformat)
+library(purrr)
+editors_parse.tbl <- editors_join.tbl 
+if (!doc_debug) {
+  rm("editors_join.tbl")
+}
+
+# first_name() fails on empty string, wrap it
+safe_first_name <- possibly(first_name, otherwise="")
+
+# remove honorifics
+editors_parse.tbl %<>% rowwise() %>% mutate( LS_FULLNAME = str_squish(str_replace( `editor`, '(Dr\\.)|(Prof\\.)|(Doctor)|(Professor)|(Dr )|(Prof )', '')))                                    editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = safe_first_name(`LS_FULLNAME`))
+                                             
+# for diagnostics
+names.tbl <- editors_parse.tbl %>% group_by(`LS_GIVENNAME`) %>% count()
+                 
+#post-cleanup
+# single letter, or ending with a period of comma, is a last name, or abbreviation rather than first
+editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = case_when(
+  LS_GIVENNAME=="" ~ NA_character_,
+  str_length(LS_GIVENNAME)==1 ~ NA_character_,
+  str_detect(LS_GIVENNAME,'.*(\\.|\\,)') ~ NA_character,
+  TRUE ~ LS_GIVENNAME
+))
+```
+```{r data-parse-countries}
+### extract country using geotext
+library(reticulate)
+editors_parse_c.tbl <- editors_parse.tbl 
+if (!doc_debug) {
+  rm("editors_parse.tbl")
+}
+
+## setup geotext
+if (doc_refresh_data & doc_debug) {
+  py_install(packages="geotext") 
+}
+
+wrap_python <- function (module,importfun) {
+  core_fun <- import(module)
+  safe_fun <- possibly(core_fun[importfun], otherwise=NA)
+  safe_list_fun <- function (xlist,...) {
+    return( 
+      sapply(xlist, safe_fun, ...,
+             simplify=TRUE, USE.NAMES=FALSE )
+    )
+  }
+}
+
+geotext<- wrap_python("geotext","GeoText") 
+
+## geotext and check against naive parsing
+
+affiliations.tbl <- editors_parse_c.tbl %>% group_by(`affiliation`) %>% slice_head(n=1) %>% ungroup() %>% select(`affiliation`)
+
+affiliations.tbl %<>% rowwise() %>% mutate(LS_COUNTRY_CHK = tail(unlist(str_split(`affiliation`,',')),n=1))
+
+affiliations.tbl %<>% rowwise() %>% mutate( 
+  LS_COUNTRY_G = names(geotext(str_to_title(`LS_COUNTRY_CHK`))[[1]]["country_mentions"])[1] 
+  )
+
+affiliations.tbl %<>% rowwise() %>% mutate(LS_COUNTRY_CHK2 = str_to_title(LS_COUNTRY_CHK),
+          LS_COUNTRY = case_when(
+  !is.na(LS_COUNTRY_G) ~ LS_COUNTRY_G, 
+  str_detect(LS_COUNTRY_CHK,"USA") ~ "US",
+  str_detect(LS_COUNTRY_CHK,"UK") ~ "GB",
+  str_detect(LS_COUNTRY_CHK2,"Netherlands") ~ "NL",
+  str_detect(LS_COUNTRY_CHK2,"Russia") ~ "RU",
+  str_detect(LS_COUNTRY_CHK2,"Viet Nam") ~ "VN",
+  str_detect(LS_COUNTRY_CHK2,"Korea") ~ "KR",
+  str_detect(LS_COUNTRY_CHK2,"Emirates") ~ "AE",
+  str_detect(LS_COUNTRY_CHK,"UAE") ~ "AE",
+  str_detect(LS_COUNTRY_CHK,"CHN") ~ "CN",
+  str_detect(LS_COUNTRY_CHK2,"Brasil") ~ "BR",
+  str_detect(LS_COUNTRY_CHK2,"Scotland") ~ "GB",
+  str_detect(LS_COUNTRY_CHK2,"Singapore") ~ "SG",
+  str_detect(LS_COUNTRY_CHK2,"Trinidad") ~ "UY",
+  str_detect(LS_COUNTRY_CHK,"KSA") ~ "SA",
+  str_detect(affiliation,"Korea") ~ "KR",
+  TRUE ~ NA_character_
+))
+
+editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","LS_COUNTRY"), by=c("affiliation"))
+
 ```
 
-# Abstract
-
-# Introduction
-
-# Materials and Methods
-
+# Methods
 ## Gender Imputation
 
 Making scholarship more inclusive requires making the characteristics of those participating visible. Because no systematic public data on self-reported author characteristics exists, however, research on participation in scholarly publications must use bibliometric methods to impute gender from author names. [See, for example, @lariviere2013bibliometrics] To impute the geneder of editors we apply a method that is commonly used in scientometric analysis and which is based on analysis of historical censuses [@blevins2015jane] to impute gender based on author names. We then use this imputation to explore the inclusion of works authored by men and women over time.[^1]
@@ -177,49 +305,44 @@ Making scholarship more inclusive requires making the characteristics of those p
 [^1]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
 
 ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
+### impute gender based on name
 library(gender)
 library(genderdata) # install using devtools::install_github("lmullen/genderdata")
-library(humaniformat) 
+
+editor_full.tbl <- editors_parse_c.tbl
+if (!doc_debug) {
+  rm("editors_parse_c.tbl")
+}
 gender_meth <- "ipums"
 
-editors.tbl %<>% rowwise() %>% mutate(NM_EDITOR=editor)
+# gender can fail on genderize method
 
-
-# parse_names fails on empty strings, wrap it# gender can fail on genderize method
-safe_first_name <- possibly(first_name, otherwise="")
-safe_format_reverse <- possibly(format_reverse, otherwise="")
 safe_gender <- possibly(gender, otherwise=list(gender=""))
 
 #TODO:
-# - strip titles from names
-# - check for  name clustering that might indicate shared editorial boards across journals
 # - compute gender only on unique names, join back in 
-
-editors.tbl %<>% rowwise() %>% mutate(LS_NM_EDITOR=`editor`)
-editors.tbl %<>% rowwise() %>% mutate(LS_NM_EDITOR_FIRST=safe_first_name(`LS_NM_EDITOR`))
 
 #TODO
 
-nms.tbl <-  editors.tbl %>% count(LS_NM_EDITOR_FIRST) %>% arrange(desc(n))
+nms.tbl <-  editors.tbl %>% count(`LS_GIVENNAME`) %>% arrange(desc(n))
 
 nms.tbl %>% rename( n_names = n) %>%  group_by(n_names) %>% 
   summarize(cluster_size=n(),
             cluster_names=paste(LS_NM_EDITOR_FIRST,sep=",",collapse=","))  %>% arrange(desc(n_names)) 
 
 nms.tbl %>% rowwise() %>%
-  mutate( LS_NM_EDITOR_GENDER = 
-            safe_gender(`LS_NM_AUTHOR_FIRST`,method=gender_meth)[["gender"]])
- 
+  mutate( LS_GENDER = 
+            safe_gender(`LS_GIVENNAME`,method=gender_meth)[["gender"]])
+```
 
-    ```
-
+# Analysis
 # Results
 
 -   Journal: field, OA status
--   Authors: \# Discussion \# References {\#references .unnumbered}
-
-# Appendices
-
+-   Authors: 
+# Discussion 
+# References {\#references .unnumbered}
+# Appendix
 Journals per publisher, and missing ISSN
 ```{r}
  editors.tbl %>% group_by(journal) %>% slice_head(n=1) %>% group_by(publisher) %>% summarize(n=n(),miss=sum(is.na(issn))) %>% gt()
@@ -228,5 +351,10 @@ Distribution of editor names
 ```{r}
  editors.tbl %>% count(LS_NM_EDITOR_FIRST) %>% arrange(desc(n))
 ```
+Affiliation matches
+```{r}
+tmp<-affiliations.tbl %>% filter(is.na(LS_COUNTRY_G)) %>% group_by(LS_COUNTRY_CHK)%>% count() %>% arrange(desc(n))
+```
+
 
 
