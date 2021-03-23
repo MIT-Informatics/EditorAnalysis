@@ -20,11 +20,8 @@ abstract: |
   
 author_summary: |
   Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
-
 bibliography: mybibfile.bib
 output: 
-  rticles::plos_article:
-    csl: plos.csl
   html_document:
     toc: yes
     toc_depth: 2
@@ -35,7 +32,8 @@ output:
     toc_float:
       collapsed: yes
       smooth_scroll: yes
-
+  rticles::plos_article:
+    csl: plos.csl
 params:
   doc_refresh_data:
     value: no
@@ -321,33 +319,11 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 Making scholarship more inclusive requires making the characteristics of those participating visible. Because no systematic public data on self-reported author characteristics exists, however, research on participation in scholarly publications must use bibliometric methods to impute gender from author names. [See, for example, @lariviere2013bibliometrics] To impute the geneder of editors we apply a method that is commonly used in scientometric analysis and which is based on analysis of historical censuses [@blevins2015jane] to impute gender based on author names. We then use this imputation to explore the inclusion of works authored by men and women over time.[^1]
 
 [^1]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
-
-```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
-### impute gender based on name
+```{r code-roles}
 editors_full.tbl <- editors_parse_c.tbl
 if (!doc_debug) {
     rm("editors_parse.tbl")
 }
-gender_meth <- "ipums"
-
-# gender can fail on genderize method
-
-safer_gender <- function(x,...) {
-  safe_gender <- possibly(gender, otherwise=list(gender=""))
-  rv <- safe_gender(x,...)[["gender"]]
-  if (is.na(rv) || (length(rv))) {
-    rv <- ""
-  }
-  rv
-}
-
-nms.tbl <-  editors_full.tbl %>% count(`LS_GIVENNAME`) %>% arrange(desc(n))
-
-nms.tbl %<>% rowwise() %>%
-  mutate( LS_GENDER = 
-           safer_gender(`LS_GIVENNAME`,method=gender_meth))
-
-editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
 
 ## role coding
 role.tbl <- editors_full.tbl %>% select(`role`) %>%  group_by(role) %>% count()  %>% mutate (`rolec`=str_to_title(role))
@@ -381,6 +357,34 @@ role.tbl %<>% rowwise() %>%
 ))
 
 editors_full.tbl %<>% left_join(role.tbl %>% select(role,CAT_ROLE,CAT_ROLE_FORMER),by=c("role"))
+rm(role.tbl)
+```
+
+```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
+### impute gender based on name
+gender_meth <- "ipums"
+#TODO: 
+# - multiple methods analysis
+# - fix genderizer timeouts
+
+# gender can fail on genderize method
+
+safer_gender <- function(x,...) {
+  safe_gender <- possibly(gender, otherwise=list(gender=""))
+  rv <- safe_gender(x,...)[["gender"]]
+  if (is.na(rv) || (length(rv)==0)) {
+    rv <- ""
+  }
+  rv
+}
+
+nms.tbl <-  editors_full.tbl %>% count(`LS_GIVENNAME`) %>% arrange(desc(n))
+
+nms.tbl %<>% rowwise() %>%
+  mutate( LS_GENDER = 
+           safer_gender(`LS_GIVENNAME`,method=gender_meth))
+
+editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
 ```
