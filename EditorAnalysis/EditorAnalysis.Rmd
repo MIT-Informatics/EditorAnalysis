@@ -22,8 +22,19 @@ author_summary: |
   Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
 
 bibliography: mybibfile.bib
-output: rticles::plos_article
-csl: plos.csl
+output: 
+  rticles::plos_article:
+    csl: plos.csl
+  html_document:
+    toc: yes
+    toc_depth: 2
+    number_section: yes
+    theme: journal
+    highlight: zenburn
+    code_folding: hide
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
 
 params:
   doc_refresh_data:
@@ -81,6 +92,14 @@ library("humaniformat") # for first name extraction
 library("gender")
 library("genderdata") # install using devtools::install_github("lmullen/genderdata")
 library("reticulate") # python geoentity extraction
+
+# analysis
+library("skimr")
+library("ggspatial") # needs libudunits2-dev -- sudo apt-get install libudunits2-dev
+                     # sudo apt-get install gdal-bin proj-bin libgdal-dev libproj-dev
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("DescTools")
 ```
 # Abstract
 
@@ -287,7 +306,7 @@ affiliations.tbl %<>% rowwise() %>% mutate(LS_COUNTRY_CHK2 = str_to_title(LS_COU
   str_detect(LS_COUNTRY_CHK2,"Brasil") ~ "BR",
   str_detect(LS_COUNTRY_CHK2,"Scotland") ~ "GB",
   str_detect(LS_COUNTRY_CHK2,"Singapore") ~ "SG",
-  str_detect(LS_COUNTRY_CHK2,"Trinidad") ~ "UY",
+  str_detect(LS_COUNTRY_CHK2,"Trinidad") ~ "TT",
   str_detect(LS_COUNTRY_CHK,"KSA") ~ "SA",
   str_detect(affiliation,"Korea") ~ "KR",
   TRUE ~ ""
@@ -328,7 +347,6 @@ nms.tbl %<>% rowwise() %>%
   mutate( LS_GENDER = 
            safer_gender(`LS_GIVENNAME`,method=gender_meth))
 
-
 editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
 
 ## role coding
@@ -363,19 +381,96 @@ role.tbl %<>% rowwise() %>%
 ))
 
 editors_full.tbl %<>% left_join(role.tbl %>% select(role,CAT_ROLE,CAT_ROLE_FORMER),by=c("role"))
+edcsv.file <- "editors_full.csv.gz"
+write_csv(editors_full.tbl,edcsv.file)
 ```
 # Analysis
-```{r}
+```{r analysis-prep}
 if (!doc_debug) {
     rm("editors_parse_c.tbl")
 }
 
+editors_full.tbl <- read_csv(edcsv.file,
+                             col_types =list(subjects=col_character()) )
+editors_analysis.tbl <- editors_full.tbl
+editors_analysis.tbl %<>% mutate (
+  FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
+  IND_MALE = na_if(LS_GENDER,"either"),
+  IND_MALE = na_if(IND_MALE,""),
+  IND_MALE = IND_MALE=="male",
+  ) %>% 
+  rename( CAT_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense) %>%
+  select(CAT_JOURNAL, CAT_PUBLISHER, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE) %>% ungroup()
 
 ### construct editorial board characteristics
-journals.tbl <- editors_full.tbl %>% group_by(journal) %>% summarise(
-  journal = head(journal,n=1),
-)
+journal_board_analysis.tbl <- editors_analysis.tbl %>% group_by(CAT_JOURNAL,FAC_ROLE) %>% summarise(
+  CAT_PUBLISHER = head(CAT_PUBLISHER,n=1),
+  LS_SUBJECTS= head(LS_SUBJECTS,n=1),
+  IND_OPEN= head(IND_OPEN,n=1),
+  LIST_ROLEGROUP_COUNTRIES = paste(na.omit(LS_COUNTRY),collapse=","),
+  N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
+  PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE)
+) %>% ungroup()
+
+journal_analysis.tbl <- journal_board_analysis.tbl %>%
+  group_by(CAT_JOURNAL) %>%
+  select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, - LIST_ROLEGROUP_COUNTRIES) %>% 
+  slice_head(n=1)
+  
 ```
+## Journal Characteristics
+```{r analysis-descriptive-journal}
+journal_analysis.tbl %>% select(-CAT_JOURNAL) %>% Desc()
+```
+## Editor Characteristics
+```{r analysis-descriptive-editorial-1}
+editors_analysis.tbl  %>% Desc(formula=~IND_MALE+LS_COUNTRY+FAC_ROLE+IND_OPEN,data=.)
+editors_analysis.tbl  %>% Desc(formula=LS_COUNTRY+FAC_ROLE+IND_MALE~IND_OPEN,data=.)
+editors_analysis.tbl  %>% Desc(formula=IND_OPEN+FAC_ROLE+IND_OPEN %in% FAC_ROLE ~ IND_MALE,data=.)
+```
+```{r analysis-editors-map}
+world.sf <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Todo: track country code non-matches "RE" "UK" "GP" "MQ" "GF" "XK" "AN"
+ctry_totals<- editors_analysis.tbl %>% group_by(LS_COUNTRY) %>% summarise(n_editors=n()) %>% rename(iso_a2=LS_COUNTRY)
+
+world.sf %<>% left_join(ctry_totals)
+
+ggplot(data = world.sf) +
+    geom_sf(aes(fill = n_editors)) +
+        scale_fill_viridis_c(option = "E", trans = "log")
+```
+
+```{r analysis-edboards}
+journal_board_analysis.tbl %>% select(-CAT_JOURNAL,-LIST_ROLEGROUP_COUNTRIES) %>% Desc(~.,data=.)
+journal_board_analysis.tbl %>%
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+
+journal_board_analysis.tbl %>%
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+
+journal_board_analysis.tbl %>%
+  filter(FAC_ROLE=="chief") %>%
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+journal_board_analysis.tbl %>%
+  filter(FAC_ROLE=="editor") %>%
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+journal_board_analysis.tbl %>%
+  filter(FAC_ROLE=="review") %>%
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+
+lm.res <- journal_board_analysis.tbl %>% 
+  lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE,data=.)
+
+
+#TODO: Use subject codes
+
+summary(lm.res)
+plot(lm.res)
+
+
+```
+
 # Results
 
 -   Journal: field, OA status
@@ -386,16 +481,103 @@ journals.tbl <- editors_full.tbl %>% group_by(journal) %>% summarise(
 # Exploratory Analysis -- Not For Submission
 
 ```{r}
-main_data.tbl <- editors_full.tbl
+explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
 ```
 
 ```{r}
 library(skimr)
-main_data.tbl %>% skim()
+for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(skim(eval(i))) }
 ```
 ```{r}
-library(skimr)
-main_data.tbl %>% skim()
+library(DescTools)
+#journal_analysis.tbl %>% select(-CAT_JOURNAL) %>% Desc()
+for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(Desc(eval(i))) }
+```
+
+
+```{r}
+# Calculate a pairwise association between all variables in a data-frame. In particular nominal vs nominal with Chi-square, numeric vs numeric with Pearson correlation, and nominal vs numeric with ANOVA.
+# Adopted from https://stackoverflow.com/a/52557631/590437
+#  -- extended by Micah Altman to detect ordered factors, and to use DescTools rather than rcompanion
+
+
+#TODO: Add nominal types
+#TODO: iterate through explore.ls
+
+mixed_assoc = function(df, cor_method="spearman", adjust_cramersv_bias=TRUE){
+    df_comb = expand.grid(names(df), names(df),  stringsAsFactors = F) %>% set_names("X1", "X2")
+
+    is_nominal = function(x) class(x) %in% c("factor", "character")
+    # https://community.rstudio.com/t/why-is-purr-is-numeric-deprecated/3559
+    # https://github.com/r-lib/rlang/issues/781
+    is_numeric <- function(x) { is.integer(x) || is_double(x)}
+    is_ordinal <- function(x) { is.ordered(x) || is_logical(x)}
+
+
+    f = function(xName,yName) {
+        x =  pull(df, xName)
+        y =  pull(df, yName)
+
+        result = if(is_nominal(x) && is_nominal(y)){
+            # use bias corrected cramersV as described in https://rdrr.io/cran/rcompanion/man/cramerV.html
+            cv = CramerV(as.character(x), as.character(y), correct= adjust_cramersv_bias)
+            data.frame(xName, yName, assoc=cv, type="cramersV")
+
+        }else if(is_numeric(x) && is_numeric(y)){
+            correlation = cor(x, y, method=cor_method, use="complete.obs")
+            data.frame(xName, yName, assoc=correlation, type="correlation")
+
+        }else if(is_numeric(x) && is_nominal(y)){
+            # from https://stats.stackexchange.com/questions/119835/correlation-between-a-nominal-iv-and-a-continuous-dv-variable/124618#124618
+            r_squared = summary(lm(x ~ y))$r.squared
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="anova")
+
+        }else if(is_nominal(x) && is_numeric(y)){
+            r_squared = summary(lm(y ~x))$r.squared
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="anova")
+
+        } else {
+            warn(paste("unmatched column type combination: ", class(x), class(y)))
+            return(NULL)
+        }
+
+        # finally add complete obs number and ratio to table
+        result %>% mutate(complete_obs_pairs=sum(!is.na(x) & !is.na(y)), complete_obs_ratio=complete_obs_pairs/length(x)) %>% rename(x=xName, y=yName)
+    }
+
+    # apply function to each variable combination
+    map2_df(df_comb$X1, df_comb$X2, f)
+}
+
+iris %>% mixed_assoc(df=.)
+ # mixed_assoc(journal_board_analysis.tbl)
+ 
+
+assoc.tbl <- journal_board_analysis.tbl %>%
+  select(-CAT_JOURNAL) %>%
+    mixed_assoc(df=.) 
+
+print(assoc.tbl)
+assoc.tbl %>%
+    select(x, y, assoc) %>%
+    spread(y, assoc) %>%
+    column_to_rownames("x") %>%
+    as.matrix %>%
+    as_cordf %>%
+    network_plot()
+
+```
+
+```{r}
+library(corrr)
+mtcars %>% 
+    mixed_assoc() %>%
+    select(x, y, assoc) %>%
+    spread(y, assoc) %>%
+    column_to_rownames("x") %>%
+    as.matrix %>%
+    as_cordf %>%
+    network_plot()
 ```
 
 
