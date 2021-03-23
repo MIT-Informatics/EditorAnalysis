@@ -390,8 +390,11 @@ if (!doc_debug) {
     rm("editors_parse_c.tbl")
 }
 
-editors_full.tbl <- read_csv(edcsv.file,
+if ( doc_debug ) {
+    editors_full.tbl <- read_csv(edcsv.file,
                              col_types =list(subjects=col_character()) )
+}
+
 editors_analysis.tbl <- editors_full.tbl
 editors_analysis.tbl %<>% mutate (
   FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
@@ -399,28 +402,32 @@ editors_analysis.tbl %<>% mutate (
   IND_MALE = na_if(IND_MALE,""),
   IND_MALE = IND_MALE=="male",
   ) %>% 
-  rename( CAT_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense) %>%
-  select(CAT_JOURNAL, CAT_PUBLISHER, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE) %>% ungroup()
+  rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense) %>%
+  select(NM_JOURNAL, CAT_PUBLISHER, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE) %>% ungroup()
 
 ### construct editorial board characteristics
-journal_board_analysis.tbl <- editors_analysis.tbl %>% group_by(CAT_JOURNAL,FAC_ROLE) %>% summarise(
-  CAT_PUBLISHER = head(CAT_PUBLISHER,n=1),
-  LS_SUBJECTS= head(LS_SUBJECTS,n=1),
+journal_board_analysis.tbl <- editors_analysis.tbl %>% 
+  group_by(NM_JOURNAL,FAC_ROLE) %>% 
+  summarise(
+    CAT_PUBLISHER = head(CAT_PUBLISHER,n=1),
+    LIST_SUBJECTS = unique(str_split(head(LS_SUBJECTS,n=1),',')),
+    N_SUBJECTS = ifelse(head(LS_SUBJECTS,n=1)=="MD", 4, length(unlist(LIST_SUBJECTS))), # ERA counts 3 subjects, plus "MD" for multidisciplinary 
   IND_OPEN= head(IND_OPEN,n=1),
-  LIST_ROLEGROUP_COUNTRIES = paste(na.omit(LS_COUNTRY),collapse=","),
+  LIST_ROLEGROUP_COUNTRIES = list(na.omit(LS_COUNTRY)),
   N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
+  N_ROLEGROUP_COUNTRIES = na_if(N_ROLEGROUP_COUNTRIES,0),
   PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE)
 ) %>% ungroup()
 
 journal_analysis.tbl <- journal_board_analysis.tbl %>%
-  group_by(CAT_JOURNAL) %>%
+  group_by(NM_JOURNAL) %>%
   select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, - LIST_ROLEGROUP_COUNTRIES) %>% 
-  slice_head(n=1)
+  slice_head(n=1) %>% ungroup() %>% select(-NM_JOURNAL)
   
 ```
 ## Journal Characteristics
 ```{r analysis-descriptive-journal}
-journal_analysis.tbl %>% select(-CAT_JOURNAL) %>% Desc()
+journal_analysis.tbl %>% select(-LIST_SUBJECTS) %>% Desc()
 ```
 ## Editor Characteristics
 ```{r analysis-descriptive-editorial-1}
@@ -442,25 +449,25 @@ ggplot(data = world.sf) +
 ```
 
 ```{r analysis-edboards}
-journal_board_analysis.tbl %>% select(-CAT_JOURNAL,-LIST_ROLEGROUP_COUNTRIES) %>% Desc(~.,data=.)
+journal_board_analysis.tbl %>% select(-NM_JOURNAL,-LIST_ROLEGROUP_COUNTRIES,-LIST_SUBJECTS) %>% Desc(~.,data=.)
 journal_board_analysis.tbl %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 
 journal_board_analysis.tbl %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 
 journal_board_analysis.tbl %>%
   filter(FAC_ROLE=="chief") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 journal_board_analysis.tbl %>%
   filter(FAC_ROLE=="editor") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 journal_board_analysis.tbl %>%
   filter(FAC_ROLE=="review") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE,data=.)
+  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 
 lm.res <- journal_board_analysis.tbl %>% 
-  lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE,data=.)
+  lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE+N_SUBJECTS,data=.)
 
 
 #TODO: Use subject codes
@@ -490,21 +497,28 @@ for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(skim(eval(
 ```
 ```{r}
 library(DescTools)
-#journal_analysis.tbl %>% select(-CAT_JOURNAL) %>% Desc()
-for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(Desc(eval(i))) }
+#journal_analysis.tbl %>% select(-NM_JOURNAL) %>% Desc()
+for (i in explore.ls)
+{ 
+  cat("****\n");
+  print(i); 
+  cat("****\n");
+  print(Desc(
+      eval(i) %>% select(-starts_with("NM_"),-where(is.list))
+             ))
+  }
 ```
 
 
 ```{r}
+library(corrr)
+
+mixed_assoc = function(df, cor_method_numeric="pearson", cor_method_ordinal="kendall",
+                       adjust_cramersv_bias=TRUE){
 # Calculate a pairwise association between all variables in a data-frame. In particular nominal vs nominal with Chi-square, numeric vs numeric with Pearson correlation, and nominal vs numeric with ANOVA.
 # Adopted from https://stackoverflow.com/a/52557631/590437
 #  -- extended by Micah Altman to detect ordered factors, and to use DescTools rather than rcompanion
-
-
-#TODO: Add nominal types
-#TODO: iterate through explore.ls
-
-mixed_assoc = function(df, cor_method="spearman", adjust_cramersv_bias=TRUE){
+  
     df_comb = expand.grid(names(df), names(df),  stringsAsFactors = F) %>% set_names("X1", "X2")
 
     is_nominal = function(x) class(x) %in% c("factor", "character")
@@ -524,18 +538,35 @@ mixed_assoc = function(df, cor_method="spearman", adjust_cramersv_bias=TRUE){
             data.frame(xName, yName, assoc=cv, type="cramersV")
 
         }else if(is_numeric(x) && is_numeric(y)){
-            correlation = cor(x, y, method=cor_method, use="complete.obs")
-            data.frame(xName, yName, assoc=correlation, type="correlation")
+            correlation = cor(x, y, method=cor_method_numeric, use="na.or.complete")
+            data.frame(xName, yName, assoc=correlation, type=cor_method_numeric)
 
         }else if(is_numeric(x) && is_nominal(y)){
             # from https://stats.stackexchange.com/questions/119835/correlation-between-a-nominal-iv-and-a-continuous-dv-variable/124618#124618
             r_squared = summary(lm(x ~ y))$r.squared
-            data.frame(xName, yName, assoc=sqrt(r_squared), type="anova")
-
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="rsq")
         }else if(is_nominal(x) && is_numeric(y)){
             r_squared = summary(lm(y ~x))$r.squared
-            data.frame(xName, yName, assoc=sqrt(r_squared), type="anova")
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="rsq")
 
+       } else if(is_ordinal(x) && is_ordinal(y)){
+            correlation = cor(as.integer(x), as.integer(y), method=cor_method_ordinal, use="na.or.complete")
+            data.frame(xName, yName, assoc=correlation, type=cor_method_ordinal)
+       }else if(is_ordinal(x) && is_numeric(y)){
+            r_squared = summary(lm(y ~ x))$r.squared
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="rsq")
+       }else if(is_numeric(x) && is_ordinal(y)){
+            r_squared = summary(lm(x ~ y))$r.squared
+            data.frame(xName, yName, assoc=sqrt(r_squared), type="rsq")
+       }else if(is_nominal(x) && is_ordinal(y)){
+
+            cv = CramerV(as.character(x), as.character(y), correct= adjust_cramersv_bias)
+            data.frame(xName, yName, assoc=cv, type="cramersV")
+       }else if(is_ordinal(x) && is_nominal(y)){
+
+            cv = CramerV(as.character(x), as.character(y), correct= adjust_cramersv_bias)
+            data.frame(xName, yName, assoc=cv, type="cramersV")
+    
         } else {
             warn(paste("unmatched column type combination: ", class(x), class(y)))
             return(NULL)
@@ -548,36 +579,34 @@ mixed_assoc = function(df, cor_method="spearman", adjust_cramersv_bias=TRUE){
     # apply function to each variable combination
     map2_df(df_comb$X1, df_comb$X2, f)
 }
+```
+```{r}
+for (i in explore.ls) { 
+  cat("****\n"); 
+  print(i); 
+  cat("****\n");
 
-iris %>% mixed_assoc(df=.)
- # mixed_assoc(journal_board_analysis.tbl)
- 
 
-assoc.tbl <- journal_board_analysis.tbl %>%
-  select(-CAT_JOURNAL) %>%
+assoc.tbl <- eval(i) %>%
+   select(-starts_with("NM_"),-where(is.list))%>%
+   slice_sample(n=1000) %>%
     mixed_assoc(df=.) 
 
 print(assoc.tbl)
-assoc.tbl %>%
+
+try ({assoc.tbl %>%
     select(x, y, assoc) %>%
+    na.omit %>%
     spread(y, assoc) %>%
     column_to_rownames("x") %>%
     as.matrix %>%
     as_cordf %>%
-    network_plot()
-
+    network_plot() %>% print})
+}
 ```
 
-```{r}
-library(corrr)
-mtcars %>% 
-    mixed_assoc() %>%
-    select(x, y, assoc) %>%
-    spread(y, assoc) %>%
-    column_to_rownames("x") %>%
-    as.matrix %>%
-    as_cordf %>%
-    network_plot()
-```
+
+
+
 
 
