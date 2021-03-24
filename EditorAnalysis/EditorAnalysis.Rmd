@@ -45,6 +45,9 @@ params:
     choices:
     - yes
     - no
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r label=setup, include=FALSE}
@@ -99,15 +102,16 @@ library("rnaturalearth")
 library("rnaturalearthdata")
 library("DescTools")
 ```
+
 # Abstract
 
 # Introduction
 
 # Data
-* Data comes from three sources: 
-** DOAJ
-** OpenEditors
-** Australian ERA journal evaluation list
+
+-   Data comes from three sources: \*\* DOAJ \*\* OpenEditors \*\*
+    Australian ERA journal evaluation list
+
 ```{r fetch-data, include=FALSE}
 ###
 ### OpenEditors Data
@@ -163,10 +167,11 @@ era_raw.tbl <- read_excel(db.name,2)
 fieldcode_raw.tbl <- read_excel(db.name,3)
 rm(db.name)
 ```
-* OpenEditors Data is cleaned for
-** character sets
-** white space
-** missing ISSN in editors -- recovered by matching to other databases on publisher and title. 
+
+-   OpenEditors Data is cleaned for \*\* character sets \*\* white space
+    \*\* missing ISSN in editors -- recovered by matching to other
+    databases on publisher and title.
+
 ```{r data-clean, include=FALSE}
 ### DOAJ
 ### normalize issn fields in preparation for merging
@@ -210,11 +215,12 @@ noissn.tbl %<>% group_by(`journal`) %>% slice_head(n=1)  %>% select("publisher",
 editors_clean.tbl %<>% left_join(noissn.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE)
 rm(noissn.tbl,duplicate_journals)
 ```
-.** Of XXX total journals in OpenEditors, YYY are matched
 
-* Data merged by ISSN 
-** Subject fields from era
-** Open license from doaj
+.\*\* Of XXX total journals in OpenEditors, YYY are matched
+
+-   Data merged by ISSN \*\* Subject fields from era \*\* Open license
+    from doaj
+
 ```{r data-merge}
 ### Join editors with journal information
 editors_join.tbl <- editors_clean.tbl
@@ -227,9 +233,12 @@ editors_join.tbl %<>% mutate(IND_openlicense = ifelse(issn=="",NA,IND_openlicens
 
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
 ```
-* Fields parsed
-- first name:  extracted from full name (using humaniformat), with preprocessing to remove titled ("Dr.","Professor.")
-- county - parsed from affiliation, validated with gazetteer
+
+-   Fields parsed
+-   first name: extracted from full name (using humaniformat), with
+    preprocessing to remove titled ("Dr.","Professor.")
+-   county - parsed from affiliation, validated with gazetteer
+
 ```{r data-parse-names}
 ### extract given names for gender analysis
 editors_parse.tbl <- editors_join.tbl 
@@ -254,6 +263,7 @@ editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = case_when(
   TRUE ~ LS_GIVENNAME
 ))
 ```
+
 ```{r data-parse-countries}
 ### extract country using geotext
 editors_parse_c.tbl <- editors_parse.tbl 
@@ -314,51 +324,74 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 ```
 
 # Methods
+
 ## Gender Imputation
 
-Making scholarship more inclusive requires making the characteristics of those participating visible. Because no systematic public data on self-reported author characteristics exists, however, research on participation in scholarly publications must use bibliometric methods to impute gender from author names. [See, for example, @lariviere2013bibliometrics] To impute the geneder of editors we apply a method that is commonly used in scientometric analysis and which is based on analysis of historical censuses [@blevins2015jane] to impute gender based on author names. We then use this imputation to explore the inclusion of works authored by men and women over time.[^1]
+Making scholarship more inclusive requires making the characteristics of
+those participating visible. Because no systematic public data on
+self-reported author characteristics exists, however, research on
+participation in scholarly publications must use bibliometric methods to
+impute gender from author names. [See, for example,
+@lariviere2013bibliometrics] To impute the geneder of editors we apply a
+method that is commonly used in scientometric analysis and which is
+based on analysis of historical censuses [@blevins2015jane] to impute
+gender based on author names. We then use this imputation to explore the
+inclusion of works authored by men and women over time.[^1]
 
-[^1]: This method is intended for aggregate analysis and coarse (binary) classification and not for individual-level analysis -- e.g. the assignment of an pronoun to a specific author. The classification reported in the table is based on the IPUMS corpus. Bootstrap resampling is used to compute confidence intervals -- this reflects sampling error, but not measurement error asising from heuristic name extraction, and uncertainty in name to gender assignment. As a sensitivity check for measurement error we replicated our analyses using two other methods: use of the Social Security Administration database and 'Kantrowitz' method (which is popular in the literature, but based on a much smaller corpus). Notwithstanding -- the range of estimates does not alter the overall substantive conclusions reported above.
-```{r code-roles}
-editors_full.tbl <- editors_parse_c.tbl
-if (!doc_debug) {
-    rm("editors_parse.tbl")
-}
+[^1]: This method is intended for aggregate analysis and coarse (binary)
+    classification and not for individual-level analysis -- e.g. the
+    assignment of an pronoun to a specific author. The classification
+    reported in the table is based on the IPUMS corpus. Bootstrap
+    resampling is used to compute confidence intervals -- this reflects
+    sampling error, but not measurement error asising from heuristic
+    name extraction, and uncertainty in name to gender assignment. As a
+    sensitivity check for measurement error we replicated our analyses
+    using two other methods: use of the Social Security Administration
+    database and 'Kantrowitz' method (which is popular in the
+    literature, but based on a much smaller corpus). Notwithstanding --
+    the range of estimates does not alter the overall substantive
+    conclusions reported above.
 
-## role coding
-role.tbl <- editors_full.tbl %>% select(`role`) %>%  group_by(role) %>% count()  %>% mutate (`rolec`=str_to_title(role))
+    ```{r code-roles}
+    editors_full.tbl <- editors_parse_c.tbl
+    if (!doc_debug) {
+        rm("editors_parse.tbl")
+    }
 
-role.tbl %<>% rowwise() %>%
-mutate(CAT_ROLE_FORMER = str_detect(rolec,'(Former)|(Past)|(Emerit)'))
+    ## role coding
+    role.tbl <- editors_full.tbl %>% select(`role`) %>%  group_by(role) %>% count()  %>% mutate (`rolec`=str_to_title(role))
 
-role.tbl %<>% rowwise() %>%
-  mutate(CAT_ROLE = case_when(
-    is.na(rolec) ~ "",
-  str_detect(rolec,"(In Chief)|(In-Chief)") ~ "chief",
-  str_detect(rolec,"Founding Editor") ~ "chief",
-  str_detect(rolec,"Associate Editor") ~ "editor",
-  str_detect(rolec,"Assistant Editor") ~ "editor",
-  str_detect(rolec,"Senior Editor") ~ "editor",
-  str_detect(rolec,"Book Review") ~ "editor",
-  str_detect(rolec,"Academic Editor") ~ "review",
-  str_detect(rolec,"Review Editor") ~ "review",
-  str_detect(rolec,"Editorial Board") ~ "review",
-  str_detect(rolec,"Advisory Board") ~ "review",
-  str_detect(rolec,"Advisory Committee") ~ "review",
-    str_detect(rolec,"Scientific Committee") ~ "review",
-  str_detect(rolec,"Scientific Advisor") ~ "review",
-  str_detect(rolec,"Editor") ~ "editor",
-    str_detect(rolec,"Advisory") ~ "review",
-  str_detect(rolec,"Review") ~ "review",
-  str_detect(rolec,"Board") ~ "review",
-  str_detect(rolec,"Academic") ~ "review",
-  str_detect(rolec,"Members") ~ "review",
-  TRUE ~ ""
-))
+    role.tbl %<>% rowwise() %>%
+    mutate(CAT_ROLE_FORMER = str_detect(rolec,'(Former)|(Past)|(Emerit)'))
 
-editors_full.tbl %<>% left_join(role.tbl %>% select(role,CAT_ROLE,CAT_ROLE_FORMER),by=c("role"))
-rm(role.tbl)
-```
+    role.tbl %<>% rowwise() %>%
+      mutate(CAT_ROLE = case_when(
+        is.na(rolec) ~ "",
+      str_detect(rolec,"(In Chief)|(In-Chief)") ~ "chief",
+      str_detect(rolec,"Founding Editor") ~ "chief",
+      str_detect(rolec,"Associate Editor") ~ "editor",
+      str_detect(rolec,"Assistant Editor") ~ "editor",
+      str_detect(rolec,"Senior Editor") ~ "editor",
+      str_detect(rolec,"Book Review") ~ "editor",
+      str_detect(rolec,"Academic Editor") ~ "review",
+      str_detect(rolec,"Review Editor") ~ "review",
+      str_detect(rolec,"Editorial Board") ~ "review",
+      str_detect(rolec,"Advisory Board") ~ "review",
+      str_detect(rolec,"Advisory Committee") ~ "review",
+        str_detect(rolec,"Scientific Committee") ~ "review",
+      str_detect(rolec,"Scientific Advisor") ~ "review",
+      str_detect(rolec,"Editor") ~ "editor",
+        str_detect(rolec,"Advisory") ~ "review",
+      str_detect(rolec,"Review") ~ "review",
+      str_detect(rolec,"Board") ~ "review",
+      str_detect(rolec,"Academic") ~ "review",
+      str_detect(rolec,"Members") ~ "review",
+      TRUE ~ ""
+    ))
+
+    editors_full.tbl %<>% left_join(role.tbl %>% select(role,CAT_ROLE,CAT_ROLE_FORMER),by=c("role"))
+    rm(role.tbl)
+    ```
 
 ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
 ### impute gender based on name
@@ -388,7 +421,9 @@ editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
 ```
+
 # Analysis
+
 ```{r analysis-prep}
 if (!doc_debug) {
     rm("editors_parse_c.tbl")
@@ -429,16 +464,21 @@ journal_analysis.tbl <- journal_board_analysis.tbl %>%
   slice_head(n=1) %>% ungroup() %>% select(-NM_JOURNAL)
   
 ```
+
 ## Journal Characteristics
+
 ```{r analysis-descriptive-journal}
 journal_analysis.tbl %>% select(-LIST_SUBJECTS) %>% Desc()
 ```
+
 ## Editor Characteristics
+
 ```{r analysis-descriptive-editorial-1}
 editors_analysis.tbl  %>% Desc(formula=~IND_MALE+LS_COUNTRY+FAC_ROLE+IND_OPEN,data=.)
 editors_analysis.tbl  %>% Desc(formula=LS_COUNTRY+FAC_ROLE+IND_MALE~IND_OPEN,data=.)
 editors_analysis.tbl  %>% Desc(formula=IND_OPEN+FAC_ROLE+IND_OPEN %in% FAC_ROLE ~ IND_MALE,data=.)
 ```
+
 ```{r analysis-editors-map}
 world.sf <- ne_countries(scale = "medium", returnclass = "sf")
 
@@ -473,6 +513,8 @@ journal_board_analysis.tbl %>%
 lm.res <- journal_board_analysis.tbl %>% 
   lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE+N_SUBJECTS,data=.)
 
+# TODO: GENDER BY DISCIPLINE
+
 
 #TODO: Use subject codes
 
@@ -485,11 +527,9 @@ plot(lm.res)
 # Results
 
 -   Journal: field, OA status
--   Authors: 
-# Discussion 
-# References {\#references .unnumbered}
-# Appendix - Supplementary Tables
-# Exploratory Analysis -- Not For Submission
+-   Authors: \# Discussion \# References {\#references .unnumbered} \#
+    Appendix - Supplementary Tables \# Exploratory Analysis -- Not For
+    Submission
 
 ```{r}
 explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
@@ -499,6 +539,7 @@ explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
 library(skimr)
 for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(skim(eval(i))) }
 ```
+
 ```{r}
 library(DescTools)
 #journal_analysis.tbl %>% select(-NM_JOURNAL) %>% Desc()
@@ -512,7 +553,6 @@ for (i in explore.ls)
              ))
   }
 ```
-
 
 ```{r}
 library(corrr)
@@ -584,6 +624,7 @@ mixed_assoc = function(df, cor_method_numeric="pearson", cor_method_ordinal="ken
     map2_df(df_comb$X1, df_comb$X2, f)
 }
 ```
+
 ```{r}
 for (i in explore.ls) { 
   cat("****\n"); 
@@ -608,9 +649,3 @@ try ({assoc.tbl %>%
     network_plot() %>% print})
 }
 ```
-
-
-
-
-
-
