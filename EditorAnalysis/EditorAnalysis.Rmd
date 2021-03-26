@@ -510,13 +510,20 @@ journal_board_analysis.tbl %>%
   filter(FAC_ROLE=="review") %>%
   Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 
+#  Countries & Gender by Discipline
+
+subject.tbl <- journal_board_analysis.tbl %>%
+  unnest(LIST_SUBJECTS) %>% 
+  rename(CAT_SUBJECT=LIST_SUBJECTS) %>% 
+  mutate(CAT_MAJSUBJECT=substr(CAT_SUBJECT,1,2)) %>%
+  group_by(CAT_MAJSUBJECT,FAC_ROLE) %>% 
+  summarize(AVG_SUBJROLE_MALE=mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
+            AVG_SUBJROLE_COUNTRIES= mean(N_ROLEGROUP_COUNTRIES)) %>%
+  left_join(fieldcode_raw.tbl,by=c(CAT_SUBJECT="FoR Code")) %>% 
+  rename(LABEL_SUBJECT="FoR Description")
+
 lm.res <- journal_board_analysis.tbl %>% 
   lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE+N_SUBJECTS,data=.)
-
-# TODO: GENDER BY DISCIPLINE
-
-
-#TODO: Use subject codes
 
 summary(lm.res)
 plot(lm.res)
@@ -527,9 +534,12 @@ plot(lm.res)
 # Results
 
 -   Journal: field, OA status
--   Authors: \# Discussion \# References {\#references .unnumbered} \#
-    Appendix - Supplementary Tables \# Exploratory Analysis -- Not For
-    Submission
+-   Authors: 
+
+# Discussion 
+# References {\#references .unnumbered} 
+# Appendix - Supplementary Tables 
+# Exploratory Analysis -- Not For Submission
 
 ```{r}
 explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
@@ -647,5 +657,22 @@ try ({assoc.tbl %>%
     as.matrix %>%
     as_cordf %>%
     network_plot() %>% print})
+}
+```
+
+```{r}
+library(brinton)
+
+if (interactive()) {
+  for (i in explore.ls)
+  { 
+  cat("****\n");
+  print(i); 
+  cat("****\n");
+  tmp <- eval(i) %>%
+    select(-starts_with("NM_"),-where(is.list)) %>%
+    as_data_frame %>% as.data.frame
+  }
+  try({wideplot(tmp,dir=".")})
 }
 ```
