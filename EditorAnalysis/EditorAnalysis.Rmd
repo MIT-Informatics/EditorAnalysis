@@ -518,9 +518,17 @@ subject.tbl <- journal_board_analysis.tbl %>%
   mutate(CAT_MAJSUBJECT=substr(CAT_SUBJECT,1,2)) %>%
   group_by(CAT_MAJSUBJECT,FAC_ROLE) %>% 
   summarize(AVG_SUBJROLE_MALE=mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
-            AVG_SUBJROLE_COUNTRIES= mean(N_ROLEGROUP_COUNTRIES)) %>%
-  left_join(fieldcode_raw.tbl,by=c(CAT_SUBJECT="FoR Code")) %>% 
-  rename(LABEL_SUBJECT="FoR Description")
+            AVG_SUBJROLE_COUNTRIES= mean(N_ROLEGROUP_COUNTRIES,na.rm=TRUE)) %>%
+  left_join(fieldcode_raw.tbl,by=c(CAT_MAJSUBJECT="FoR Code")) %>% 
+  rename(LABEL_SUBJECT="FoR Description") %>% ungroup() %>%
+  mutate(LABEL_SUBJECT= ifelse(str_starts(CAT_MAJSUBJECT,"MD"),"Multidisciplinary",LABEL_SUBJECT))
+
+
+subject.tbl %>% filter(FAC_ROLE=="editor") %>% arrange(AVG_SUBJROLE_MALE) %>%
+  select(AVG_SUBJROLE_MALE,LABEL_SUBJECT) %>% gt()
+
+subject.tbl %>% filter(FAC_ROLE=="editor") %>% arrange(desc(AVG_SUBJROLE_COUNTRIES)) %>%
+  select(AVG_SUBJROLE_COUNTRIES,LABEL_SUBJECT) %>% gt()
 
 lm.res <- journal_board_analysis.tbl %>% 
   lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE+N_SUBJECTS,data=.)
