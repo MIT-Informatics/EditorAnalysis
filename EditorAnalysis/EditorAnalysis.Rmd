@@ -1,25 +1,5 @@
 ---
-title: Title of submission to PLOS journal
-author:
-  - name: Alice Anonymous
-    email: alice@example.com
-    affiliation: Some Institute of Technology
-    corresponding: alice@example.com
-  - name: Bob Security
-    email: bob@example.com
-    affiliation: 
-      - Another University
-      - Some Institute of Technology
-address:
-  - code: Some Institute of Technology
-    address: Department 1, Street, City, State, Zip
-  - code: Another University
-    address: Department 2, Street, City, State, Zip
-abstract: |
-  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
-  
-author_summary: |
-  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur eget porta erat. Morbi consectetur est vel gravida pretium. Suspendisse ut dui eu ante cursus gravida non sed sem. Nullam sapien tellus, commodo id velit id, eleifend volutpat quam. Phasellus mauris velit, dapibus finibus elementum vel, pulvinar non tellus. Nunc pellentesque pretium diam, quis maximus dolor faucibus id. Nunc convallis sodales ante, ut ullamcorper est egestas vitae. Nam sit amet enim ultrices, ultrices elit pulvinar, volutpat risus.
+title: Replication for ...
 bibliography: mybibfile.bib
 output: 
   html_document:
@@ -81,12 +61,14 @@ library("purrr")
 if (doc_debug) {
   require("tidylog")
 }
-library(gt)
-library(ggplot2)
+library("gt")
+library("ggplot2")
+library("patchwork")
 
 # data retrieval
 library("R.utils")
 library("readxl")
+library("fuzzyjoin")
 
 # entity extraction and classification
 library("humaniformat") # for first name extraction
@@ -102,20 +84,15 @@ library("rnaturalearth")
 library("rnaturalearthdata")
 library("DescTools")
 ```
-
-# Abstract
-
-# Introduction
-
-# Data
-
--   Data comes from three sources: \*\* DOAJ \*\* OpenEditors \*\*
-    Australian ERA journal evaluation list
-
 ```{r fetch-data, include=FALSE}
 ###
-### OpenEditors Data
+### Retrieve raw data from sources
 ### 
+
+
+##
+## OpenEditors Data
+## 
 
 db.name <- "openeditors_combined.csv"
 if (doc_refresh_data) {
@@ -140,9 +117,9 @@ if (doc_refresh_data) {
 editors_raw.tbl <- read_csv(paste(db.name,".gz",sep=""))
 
 
-###
-### DOAJ
-###
+##
+## DOAJ
+##
 
 db.name <- "doaj.csv"
 if (doc_refresh_data) {
@@ -153,9 +130,9 @@ if (doc_refresh_data) {
 doaj_raw.tbl <- read_csv(paste(db.name,".gz",sep=""))
 
 
-###
-### ERA
-### 
+##
+## ERA
+## 
 
 
 db.name <- "era.xlsx" 
@@ -168,9 +145,26 @@ fieldcode_raw.tbl <- read_excel(db.name,3)
 rm(db.name)
 ```
 
--   OpenEditors Data is cleaned for \*\* character sets \*\* white space
-    \*\* missing ISSN in editors -- recovered by matching to other
-    databases on publisher and title.
+
+```{r data-tops-fetch}
+##
+## TOPS
+## 
+
+target.uri <- "https://osf.io/qatkz/download"
+db.name <- "tops_factor_raw.csv" 
+if (doc_refresh_data) {
+  download.file(target.uri,db.name)
+}
+tops_factor_raw.tbl <- read_csv(db.name)
+target.uri <- "https://osf.io/y2rr6/download"
+db.name <- "tops_signatory.csv" 
+if (doc_refresh_data) {
+  download.file(target.uri,db.name)
+}
+tops_signatory_raw.tbl <- read_csv(db.name)
+rm(db.name,target.uri)
+```
 
 ```{r data-clean, include=FALSE}
 ### DOAJ
@@ -192,46 +186,97 @@ era.tbl %<>% unite("subjects",starts_with("FoR"),sep=",",na.rm=TRUE) %>%
 editors_clean.tbl <- editors_raw.tbl
 editors_clean.tbl %<>% select(-X1) 
 editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),as_utf8_character)) # clean unicode sequences
-editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_all(x,'\\<.*\\>',''))) # strip unresolved escapes (TODO: convert latin-1 escape sequences to Unicode rather than strip them)
+editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_replace_all(x,'\\<.*\\>',''))) # strip unresolved escapes 
+#TODO: convert latin-1 escape sequences to Unicode rather than strip them)
 editors_clean.tbl %<>%
 mutate(across(-c("issn","date","url"),str_squish)) # clean unicode sequences
 
 # Some journals missing ISSN code, match against other sources by name & publisher to find ISSN
-noissn.tbl <- editors_clean.tbl %>% filter(is.na(issn)) %>% select(c("journal","publisher"))  %>% group_by(journal)  
-duplicate_journals <- noissn.tbl %>% group_by(journal,publisher) %>% count() %>% group_by(journal) %>% count() %>% filter(n>1)
+era_issn.tbl <-  era.tbl %>% select("issn","journal") %>% group_by(journal) %>% slice_head(n=1) %>% rowwise() %>% mutate(
+  journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
+) %>% ungroup() %>% select(-journal)
+
+noissn.tbl <- editors_clean.tbl %>% 
+  filter(issn=="") %>% select(c("journal","publisher")) %>% 
+  mutate(
+  journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
+) %>% ungroup()
+duplicate_journals <- noissn.tbl %>% group_by(journalStd,publisher) %>% count() %>% group_by(journalStd) %>% count() %>% filter(n>1)
 
 if (nrow(duplicate_journals>0))  { 
-  warning("duplicate journal names")
+  warn("duplicate journal names")
+  noissn.tbl %<>% group_by(journalStd) %>% slice_head(n=1) %>% ungroup()
 }
 
-noissn.tbl %<>% group_by(journal) %>% slice_head(n=1)
+noissn.tbl %<>% left_join( era_issn.tbl , by=c("journalStd")) 
+joinedissn.tbl <- noissn.tbl %>% filter(!is.na(issn))
+noissn.tbl %<>% filter(is.na(issn)) %>% select(-issn)
 
-noissn.tbl %<>% left_join( era.tbl %>% select("issn","journal"), by=c("journal")) %>% filter(!is.na(issn)) 
+joinedissn.tbl %<>% group_by(`journal`) %>% slice_head(n=1)  %>% select("publisher","issn")
 
-# TODO: extend by using fuzzy joins on the ones that are still missing
+editors_clean.tbl %<>% left_join(joinedissn.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE)
 
-noissn.tbl %<>% group_by(`journal`) %>% slice_head(n=1)  %>% select("publisher","issn")
 
-editors_clean.tbl %<>% left_join(noissn.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE)
-rm(noissn.tbl,duplicate_journals)
+# fuzzy matching on remaining journals
+
+matches.tbl <- noissn.tbl %>% stringdist_left_join( 
+  era_issn.tbl ,
+  by=c("journalStd"), 
+  ignore_case=TRUE,
+  distance_col="dist",
+  max_dist=3
+  ) %>% 
+  filter(!issn=="") %>% 
+  mutate(len=str_length(journalStd.x),distp=(len-dist)/len) %>% arrange(desc(distp)) %>%
+  group_by(journal) %>%
+  slice_max(distp) %>% 
+  slice_head() %>% 
+  filter(distp >= .95)
+
+matches.tbl %<>% select(journal,issn,publisher)
+
+editors_clean.tbl %<>% 
+  left_join(matches.tbl,by=c("publisher","journal")) %>%
+  unite("issn","issn.x","issn.y",na.rm=TRUE)
+
+rm(joinedissn.tbl.tbl,duplicate_journals, matches.tbl)
 ```
 
-.\*\* Of XXX total journals in OpenEditors, YYY are matched
+```{r tops-clean}
 
--   Data merged by ISSN \*\* Subject fields from era \*\* Open license
-    from doaj
+### clean tops data
+
+tops_factor_clean.tbl <- tops_factor_raw.tbl %>%
+  select(Journal, Issn, Publisher, Total) %>%
+  rename(journal=Journal,issn=Issn,topScore=Total) %>% mutate(
+    journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
+  )
+
+matches.tbl <- tops_factor_clean.tbl %>% filter(is.na(issn)) %>% select(journalStd) %>% left_join(era_issn.tbl,by=("journalStd")) %>% filter(!is.na(issn))
+
+tops_factor_clean.tbl %<>% left_join(matches.tbl, by=("journalStd")) %>%
+    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% filter(!is.na(issn)) %>% 
+    group_by(issn) %>% slice_head()
+
+```
+
 
 ```{r data-merge}
 ### Join editors with journal information
 editors_join.tbl <- editors_clean.tbl
+
 if (!doc_debug) {
-    rm("editors_raw.tbl","era_raw.tbl")
+    #rm("editors_raw.tbl","era_raw.tbl")
 }
 editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by="issn") %>% rename(license="Journal license")  %>% rowwise() %>%  mutate(license = ifelse(is.na(license),"none",license),  IND_openlicense=(license!="none"))
 
 editors_join.tbl %<>% mutate(IND_openlicense = ifelse(issn=="",NA,IND_openlicense))
 
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
+editors_join.tbl %<>% left_join(tops_factor_clean.tbl %>% select(issn,topScore) %>% filter(!is.na(issn)),by=c("issn")) 
+editors_join.tbl %<>% rowwise() %>% mutate(topScoreAdj = ifelse(is.na(topScore),0,topScore+1)) %>% select(-topScore)
+
+
 ```
 
 -   Fields parsed
@@ -327,30 +372,7 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 
 ## Gender Imputation
 
-Making scholarship more inclusive requires making the characteristics of
-those participating visible. Because no systematic public data on
-self-reported author characteristics exists, however, research on
-participation in scholarly publications must use bibliometric methods to
-impute gender from author names. [See, for example,
-@lariviere2013bibliometrics] To impute the geneder of editors we apply a
-method that is commonly used in scientometric analysis and which is
-based on analysis of historical censuses [@blevins2015jane] to impute
-gender based on author names. We then use this imputation to explore the
-inclusion of works authored by men and women over time.[^1]
 
-[^1]: This method is intended for aggregate analysis and coarse (binary)
-    classification and not for individual-level analysis -- e.g. the
-    assignment of an pronoun to a specific author. The classification
-    reported in the table is based on the IPUMS corpus. Bootstrap
-    resampling is used to compute confidence intervals -- this reflects
-    sampling error, but not measurement error asising from heuristic
-    name extraction, and uncertainty in name to gender assignment. As a
-    sensitivity check for measurement error we replicated our analyses
-    using two other methods: use of the Social Security Administration
-    database and 'Kantrowitz' method (which is popular in the
-    literature, but based on a much smaller corpus). Notwithstanding --
-    the range of estimates does not alter the overall substantive
-    conclusions reported above.
 
     ```{r code-roles}
     editors_full.tbl <- editors_parse_c.tbl
@@ -493,7 +515,20 @@ ggplot(data = world.sf) +
 ```
 
 ```{r analysis-edboards}
+
+
 journal_board_analysis.tbl %>% select(-NM_JOURNAL,-LIST_ROLEGROUP_COUNTRIES,-LIST_SUBJECTS) %>% Desc(~.,data=.)
+p1<-journal_board_analysis.tbl %>%
+  filter(IND_OPEN) %>%
+  Desc(FAC_ROLE~PERCENT_ROLEGROUP_MALE,data=.)
+
+p2<- journal_board_analysis.tbl %>%
+  filter(!IND_OPEN) %>%
+  Desc(FAC_ROLE~PERCENT_ROLEGROUP_MALE,data=.)
+
+plot(p1)
+plot(p2)
+
 journal_board_analysis.tbl %>%
   Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
 
@@ -509,6 +544,8 @@ journal_board_analysis.tbl %>%
 journal_board_analysis.tbl %>%
   filter(FAC_ROLE=="review") %>%
   Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
+
+
 
 #  Countries & Gender by Discipline
 
