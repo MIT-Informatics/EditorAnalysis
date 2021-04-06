@@ -170,8 +170,10 @@ rm(db.name,target.uri)
 ### DOAJ
 ### normalize issn fields in preparation for merging
 doaj.tbl <- doaj_raw.tbl
-doaj.tbl %<>% pivot_longer(cols=c("Journal ISSN (print version)","Journal EISSN (online version)"),
-                           values_to ="issn", names_to ="issn_type ", values_drop_na=TRUE)
+doaj.tbl %<>% pivot_longer(cols=c("Journal ISSN (print version)",
+                  "Journal EISSN (online version)"),
+                  values_to ="issn", names_to ="issn_type ", values_drop_na=TRUE) %>%
+  rename(journal=`Journal title`,publisher=Publisher)
 # NOTE -- checked that LICENSE, LCC not missing
 
 ### ERA
@@ -191,98 +193,180 @@ editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_repl
 editors_clean.tbl %<>%
 mutate(across(-c("issn","date","url"),str_squish)) # clean unicode sequences
 
-# Some journals missing ISSN code, match against other sources by name & publisher to find ISSN
-era_issn.tbl <-  era.tbl %>% select("issn","journal") %>% group_by(journal) %>% slice_head(n=1) %>% rowwise() %>% mutate(
-  journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
-) %>% ungroup() %>% select(-journal)
-
-noissn.tbl <- editors_clean.tbl %>% 
-  filter(issn=="") %>% select(c("journal","publisher")) %>% 
-  mutate(
-  journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
-) %>% ungroup()
-duplicate_journals <- noissn.tbl %>% group_by(journalStd,publisher) %>% count() %>% group_by(journalStd) %>% count() %>% filter(n>1)
-
-if (nrow(duplicate_journals>0))  { 
-  warn("duplicate journal names")
-  noissn.tbl %<>% group_by(journalStd) %>% slice_head(n=1) %>% ungroup()
-}
-
-noissn.tbl %<>% left_join( era_issn.tbl , by=c("journalStd")) 
-joinedissn.tbl <- noissn.tbl %>% filter(!is.na(issn))
-noissn.tbl %<>% filter(is.na(issn)) %>% select(-issn)
-
-joinedissn.tbl %<>% group_by(`journal`) %>% slice_head(n=1)  %>% select("publisher","issn")
-
-editors_clean.tbl %<>% left_join(joinedissn.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE)
-
-
-# fuzzy matching on remaining journals
-
-matches.tbl <- noissn.tbl %>% stringdist_left_join( 
-  era_issn.tbl ,
-  by=c("journalStd"), 
-  ignore_case=TRUE,
-  distance_col="dist",
-  max_dist=3
-  ) %>% 
-  filter(!issn=="") %>% 
-  mutate(len=str_length(journalStd.x),distp=(len-dist)/len) %>% arrange(desc(distp)) %>%
-  group_by(journal) %>%
-  slice_max(distp) %>% 
-  slice_head() %>% 
-  filter(distp >= .95)
-
-matches.tbl %<>% select(journal,issn,publisher)
-
-editors_clean.tbl %<>% 
-  left_join(matches.tbl,by=c("publisher","journal")) %>%
-  unite("issn","issn.x","issn.y",na.rm=TRUE)
-
-rm(joinedissn.tbl.tbl,duplicate_journals, matches.tbl)
-```
-
-```{r tops-clean}
-
 ### clean tops data
 
 tops_factor_clean.tbl <- tops_factor_raw.tbl %>%
   select(Journal, Issn, Publisher, Total) %>%
-  rename(journal=Journal,issn=Issn,topScore=Total) %>% mutate(
-    journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
+  rename(journal=Journal,issn=Issn,topScore=Total, publisher=Publisher)
+
+tops_signatory_clean.tbl <- tops_signatory_raw.tbl %>%
+  rename(journal="Journal Title", publisher="Publisher") %>%
+  select(journal,publisher) %>% 
+  mutate(issn=NA_character_)
+
+## Some journals missing ISSN code
+## Generate matching tables from era and doaj
+era_issn_only.tbl <-  era.tbl %>% select("issn","journal") %>% group_by(journal) %>% slice_head(n=1) %>% rowwise() %>% mutate(
+  journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " "))))
+) %>% ungroup() %>% select(-journal)
+# match to doaj
+doaj_issn_only.tbl <- doaj.tbl %>% mutate(
+ journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " ")))),
+pubStd = str_to_lower(str_squish((str_replace_all(publisher, regex("\\W+"), " ")))),
+ ) %>% select(journalStd,pubStd,issn)
+
+```
+
+```{r data-issnmatch, include=FALSE}
+
+issnClean<-function(db) {
+#TODO: experiment with publisher matching, journal duplicate title cleaning
+  
+  # standardize issn missing values
+  db %<>% rowwise() %>% mutate(issn=na_if(issn,""))
+  
+  # wipe bogus ISSNS
+  db %<>% rowwise() %>% mutate(issn=ifelse(str_detect(issn,"-"),issn,NA))
+  
+  # standardize journal title
+  db %<>% rowwise() %>% mutate(
+    journalStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " ")))),
+    pubStd = str_to_lower(str_squish((str_replace_all(journal, regex("\\W+"), " ")))), 
   )
 
-matches.tbl <- tops_factor_clean.tbl %>% filter(is.na(issn)) %>% select(journalStd) %>% left_join(era_issn.tbl,by=("journalStd")) %>% filter(!is.na(issn))
+    # exact join to era
+  joinedissn <- db %>% ungroup %>% filter(is.na(issn)) %>%
+    select(journalStd) %>% 
+    left_join(era_issn_only.tbl,by=("journalStd")) %>%
+    filter(!is.na(issn)) %>% 
+    select(journalStd,issn)
+  
+  db  %<>% left_join(joinedissn, by=("journalStd")) %>%
+    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% 
+    group_by(journal) %>% slice_head() %>% ungroup %>%
+     mutate(issn=na_if(issn,""))
+  
+  # exact join to doaj
+  
+  joinedissn <- db %>% ungroup %>% filter(is.na(issn)) %>%
+    select(journalStd) %>% 
+    left_join(doaj_issn_only.tbl %>% select(-pubStd),by=("journalStd")) %>%
+    filter(!is.na(issn)) %>% select(journalStd,issn)
+   
+  db  %<>% left_join(joinedissn, by=("journalStd")) %>%
+    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% 
+    group_by(journal) %>% slice_head() %>% ungroup %>%
+     mutate(issn=na_if(issn,""))
+  
+  # fuzzy join to era
+  
+  joinedissn <- 
+    db %>% ungroup %>% filter(is.na(issn)) %>%
+    select(journalStd) %>% 
+    stringdist_left_join( 
+      era_issn_only.tbl ,
+      by=c("journalStd"), 
+      ignore_case=TRUE,
+      distance_col="dist",
+      max_dist=3
+    ) %>% 
+    rename(journalStd=journalStd.x) %>%
+    filter(!is.na(issn)) %>% 
+    mutate(len=str_length(journalStd),distp=(len-dist)/len) %>% arrange(desc(distp)) %>%
+    group_by(journalStd) %>%
+    slice_max(distp) %>% 
+    slice_head() %>% 
+    ungroup() %>%
+    filter(distp >= .95) %>%
+    select(journalStd,issn)
 
-tops_factor_clean.tbl %<>% left_join(matches.tbl, by=("journalStd")) %>%
-    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% filter(!is.na(issn)) %>% 
-    group_by(issn) %>% slice_head()
+  db  %<>% left_join(joinedissn, by=("journalStd")) %>%
+    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% 
+    group_by(journal) %>% slice_head() %>% ungroup %>%
+    mutate(issn=na_if(issn,""))
+  
+  # fuzzy join to doaj
+  
+  joinedissn <- 
+    db %>% ungroup %>% filter(is.na(issn)) %>%
+    select(journalStd) %>% 
+    stringdist_left_join( 
+      doaj_issn_only.tbl %>% select(-pubStd) ,
+      by=c("journalStd"), 
+      ignore_case=TRUE,
+      distance_col="dist",
+      max_dist=3
+    ) %>% 
+    rename(journalStd=journalStd.x) %>%
+    filter(!is.na(issn)) %>% 
+    mutate(len=str_length(journalStd),distp=(len-dist)/len) %>% arrange(desc(distp)) %>%
+    group_by(journalStd) %>%
+    slice_max(distp) %>% 
+    slice_head() %>% 
+    ungroup() %>%
+    filter(distp >= .95) %>%
+    select(journalStd,issn)
 
+  db  %<>% left_join(joinedissn, by=("journalStd")) %>%
+    unite("issn","issn.x","issn.y",na.rm=TRUE) %>% 
+    group_by(journal) %>% slice_head() %>% ungroup %>%
+    mutate(issn=na_if(issn,""))
+  
+  db %>% select(-journalStd,-pubStd)
+}
+
+#debug(issnClean)
+tops_factor_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+tops_factor.tbl <- issnClean(tops_factor_clean.tbl)
+tops_factor.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+tops_factor.tbl %<>% filter(!is.na(issn))
+tops_signatory_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+tops_signatory.tbl <- issnClean(tops_signatory_clean.tbl)
+tops_signatory.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+tops_signatory.tbl %<>% filter(!is.na(issn)) %>% mutate(topsSign=TRUE)
+
+noissn_ed.tbl <- editors_clean.tbl %>%  filter(is.na(issn)) %>% select(c("journal","publisher","issn")) %>% group_by(journal,publisher) %>% 
+  slice_head() %>% ungroup
+
+duplicate_journals <- noissn_ed.tbl %>% group_by(journal) %>% count() %>% filter(n>1)
+if (nrow(duplicate_journals>0))  { 
+  print(paste("duplicate journal names", nrow(duplicate_journals)))
+}
+print(nrow(noissn_ed.tbl))
+noissn_ed.tbl %<>% issnClean() 
+noissn_ed.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+noissn_ed.tbl %<>% filter(!is.na(issn)) %>% 
+  group_by(journal,publisher) %>% slice_head(n=1) %>% ungroup
+
+editors_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+editors_issn.tbl <- editors_clean.tbl %>% left_join(noissn_ed.tbl,by=c("publisher","journal")) %>% unite("issn","issn.x","issn.y",na.rm=TRUE) %>%
+mutate(issn=na_if(issn,""))  
+editors_issn.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+
+rm(noissn_ed.tbl,duplicate_journals )
 ```
 
 
 ```{r data-merge}
 ### Join editors with journal information
-editors_join.tbl <- editors_clean.tbl
+editors_join.tbl <- editors_issn.tbl
 
 if (!doc_debug) {
-    #rm("editors_raw.tbl","era_raw.tbl")
+    rm("editors_raw.tbl","era_raw.tbl")
 }
+
+# note if journal doesn't appear in doaj, we define it as not having an open license
+# this applies even where there the issn is missing because we've already tried to repair
+# issn by matching against the doaj database journal title
+
 editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by="issn") %>% rename(license="Journal license")  %>% rowwise() %>%  mutate(license = ifelse(is.na(license),"none",license),  IND_openlicense=(license!="none"))
 
-editors_join.tbl %<>% mutate(IND_openlicense = ifelse(issn=="",NA,IND_openlicense))
-
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
-editors_join.tbl %<>% left_join(tops_factor_clean.tbl %>% select(issn,topScore) %>% filter(!is.na(issn)),by=c("issn")) 
-editors_join.tbl %<>% rowwise() %>% mutate(topScoreAdj = ifelse(is.na(topScore),0,topScore+1)) %>% select(-topScore)
+
+editors_join.tbl %<>% left_join(tops_factor.tbl %>% select(issn,topScore) ,by=c("issn"))
+editors_join.tbl %<>% left_join(tops_signatory.tbl %>% select(issn,topsSign) ,by=c("issn")) %>% rowwise()  %>% mutate(topsSign=ifelse(is.na(topsSign),is.na(issn),topsSign))
 ```
 
-
-```{r data-parse-personid}
-
-
-
-```
 
 
 -   Fields parsed
@@ -294,7 +378,7 @@ editors_join.tbl %<>% rowwise() %>% mutate(topScoreAdj = ifelse(is.na(topScore),
 ### extract given names for gender analysis
 editors_parse.tbl <- editors_join.tbl 
 if (!doc_debug) {
-    #rm("editors_clean.tbl")
+    rm("editors_clean.tbl")
 }
 
 # create an internal id for each person in the data
@@ -450,12 +534,16 @@ safer_gender <- function(x,...) {
   }
   rv
 }
+if (doc_refresh_data){
+  nms.tbl <-  editors_full.tbl %>% count(`LS_GIVENNAME`) %>% arrange(desc(n))
 
-nms.tbl <-  editors_full.tbl %>% count(`LS_GIVENNAME`) %>% arrange(desc(n))
-
-nms.tbl %<>% rowwise() %>%
-  mutate( LS_GENDER = 
+  nms.tbl %<>% rowwise() %>%
+    mutate( LS_GENDER = 
            safer_gender(`LS_GIVENNAME`,method=gender_meth))
+  save(nms.tbl,file=paste("nms_",gender_meth,".RData",sep=""))
+} else {
+  load( file=paste("nms_",gender_meth,".RData",sep=""))
+}
 
 editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
@@ -473,14 +561,24 @@ if ( doc_debug ) {
 }
 
 editors_analysis.tbl <- editors_full.tbl
+editors_analysis.tbl %<>% rowwise() %>%
+  mutate(CAT_TOP = case_when(
+    ((is.na(topScore)==FALSE) && (topScore > 0)) ~ 3,
+    (is.na(topScore)==FALSE) ~ 2,
+    ((is.na(topsSign)==FALSE) && topsSign) ~ 1,
+    (is.na(topsSign)==FALSE) ~ 0,
+#    TRUE ~ NA
+  ))
+
 editors_analysis.tbl %<>% mutate (
   FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
   IND_MALE = na_if(LS_GENDER,"either"),
   IND_MALE = na_if(IND_MALE,""),
+  LS_COUNTRY = na_if(LS_COUNTRY,""),
   IND_MALE = IND_MALE=="male",
   ) %>% 
-  rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense) %>%
-  select(NM_JOURNAL, CAT_PUBLISHER, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE) %>% ungroup()
+  rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense, NM_EDID=editor_id) %>%
+  select(NM_JOURNAL, CAT_PUBLISHER,CAT_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, CAT_TOP,NM_EDID) %>% ungroup()
 
 ### construct editorial board characteristics
 journal_board_analysis.tbl <- editors_analysis.tbl %>% 
@@ -490,17 +588,58 @@ journal_board_analysis.tbl <- editors_analysis.tbl %>%
     LIST_SUBJECTS = unique(str_split(head(LS_SUBJECTS,n=1),',')),
     N_SUBJECTS = ifelse(head(LS_SUBJECTS,n=1)=="MD", 4, length(unlist(LIST_SUBJECTS))), # ERA counts 3 subjects, plus "MD" for multidisciplinary 
   IND_OPEN= head(IND_OPEN,n=1),
+  CAT_TOP=  head(CAT_TOP,n=1),
+  N_BRD_SIZE = n(),
+  LIST_EDID = list(na.omit(NM_EDID)),
   LIST_ROLEGROUP_COUNTRIES = list(na.omit(LS_COUNTRY)),
   N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
   N_ROLEGROUP_COUNTRIES = na_if(N_ROLEGROUP_COUNTRIES,0),
   PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE)
-) %>% ungroup()
+) %>% 
+  rowwise() %>%
+  mutate(LIST_EDID = ifelse(length(unlist(LIST_EDID))==0, NA, LIST_EDID),
+         LIST_ROLEGROUP_COUNTRIES = 
+           ifelse(length(unlist(LIST_ROLEGROUP_COUNTRIES))==0,NA,LIST_ROLEGROUP_COUNTRIES)
+         ) %>%
+  ungroup()
 
 journal_analysis.tbl <- journal_board_analysis.tbl %>%
   group_by(NM_JOURNAL) %>%
-  select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, - LIST_ROLEGROUP_COUNTRIES) %>% 
-  slice_head(n=1) %>% ungroup() %>% select(-NM_JOURNAL)
-  
+  mutate(N_JRN_SIZE=sum(N_BRD_SIZE)) %>%
+  mutate(LIST_EDID=list(unique( na.omit(unlist(LIST_EDID))))) %>%
+  select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, -LIST_ROLEGROUP_COUNTRIES, -N_JRN_SIZE, -FAC_ROLE) %>% 
+  slice_head()  %>%
+  rowwise() %>%
+  mutate(LIST_EDID2=ifelse(length(unlist(LIST_EDID))==0, NA,  list(LIST_EDID)))%>%
+  ungroup() %>% 
+  mutate(NM_JOURNALID=seq_len(n()))
+```
+```{r network-gen}
+library("DiagrammeR")
+library("tidygraph")
+library("igraph")
+library("ggraph")
+edges.df <- journal_analysis.tbl %>% select(LIST_EDID,NM_JOURNALID) %>% unnest(LIST_EDID)
+edges.df %<>% left_join(edges.df,by=c("LIST_EDID")) %>%
+  group_by(NM_JOURNALID.x,NM_JOURNALID.y) %>%
+  slice_head() %>% 
+  select(-LIST_EDID) %>% 
+  rowwise() %>% 
+  filter(NM_JOURNALID.x!=NM_JOURNALID.y) %>% 
+  rename(to=NM_JOURNALID.x, from=NM_JOURNALID.y) %>%
+  ungroup() %>%
+  mutate(id=seq_len(n())) %>%
+  relocate(id,to,from)
+
+nodes.df <- journal_analysis.tbl
+
+gr.values <-create_graph(
+  nodes_df = df.nodes.values , 
+  edges_df = df.edges.values, 
+  graph_name="Journal Board Sharing",
+  directed=FALSE)
+
+tmp1<- gr.values %>% render_graph()
 ```
 
 
@@ -614,7 +753,6 @@ for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(skim(eval(
 
 ```{r}
 library(DescTools)
-#journal_analysis.tbl %>% select(-NM_JOURNAL) %>% Desc()
 for (i in explore.ls)
 { 
   cat("****\n");
@@ -705,36 +843,23 @@ for (i in explore.ls) {
 
 
 assoc.tbl <- eval(i) %>%
-   select(-starts_with("NM_"),-where(is.list))%>%
+   select(-starts_with("NM_"), -starts_with("LIST_"),-where(is.list))%>%
    slice_sample(n=1000) %>%
     mixed_assoc(df=.) 
 
 print(assoc.tbl)
 
-try ({assoc.tbl %>%
+
+try ({
+  assoc.tbl %>%
     select(x, y, assoc) %>%
     na.omit %>%
     spread(y, assoc) %>%
     column_to_rownames("x") %>%
+    na.omit %>%
     as.matrix %>%
     as_cordf %>%
-    network_plot() %>% print})
-}
-```
-
-```{r}
-library(brinton)
-
-if (interactive()) {
-  for (i in explore.ls)
-  { 
-  cat("****\n");
-  print(i); 
-  cat("****\n");
-  tmp <- eval(i) %>%
-    select(-starts_with("NM_"),-where(is.list)) %>%
-    as_data_frame %>% as.data.frame
-  }
-  try({wideplot(tmp,dir=".")})
+    network_plot() %>% print
+  })
 }
 ```
