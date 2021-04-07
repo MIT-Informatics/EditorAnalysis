@@ -609,17 +609,20 @@ journal_analysis.tbl <- journal_board_analysis.tbl %>%
   mutate(LIST_EDID=list(unique( na.omit(unlist(LIST_EDID))))) %>%
   select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, -LIST_ROLEGROUP_COUNTRIES, -N_JRN_SIZE, -FAC_ROLE) %>% 
   slice_head()  %>%
-  rowwise() %>%
-  mutate(LIST_EDID2=ifelse(length(unlist(LIST_EDID))==0, NA,  list(LIST_EDID)))%>%
   ungroup() %>% 
   mutate(NM_JOURNALID=seq_len(n()))
 ```
 ```{r network-gen}
 library("DiagrammeR")
+library("DiagrammeRsvg")
 library("tidygraph")
 library("igraph")
 library("ggraph")
-edges.df <- journal_analysis.tbl %>% select(LIST_EDID,NM_JOURNALID) %>% unnest(LIST_EDID)
+library("rsvg") # for exporting graph files -- silent failure from DiagrammeR without it
+edges.df <- journal_analysis.tbl %>% 
+  select(LIST_EDID,NM_JOURNALID) %>% 
+  unnest(LIST_EDID)
+
 edges.df %<>% left_join(edges.df,by=c("LIST_EDID")) %>%
   group_by(NM_JOURNALID.x,NM_JOURNALID.y) %>%
   slice_head() %>% 
@@ -628,18 +631,53 @@ edges.df %<>% left_join(edges.df,by=c("LIST_EDID")) %>%
   filter(NM_JOURNALID.x!=NM_JOURNALID.y) %>% 
   rename(to=NM_JOURNALID.x, from=NM_JOURNALID.y) %>%
   ungroup() %>%
-  mutate(id=seq_len(n())) %>%
+  mutate(id=seq_len(n()),rel="shared editor") %>%
   relocate(id,to,from)
 
+# remove duplicate edges for undirected graph
+edges_undirected.df <- edges.df %>% rowwise () %>%
+  mutate(tmpkey=paste(sort(c(to,from)),collapse="-")) %>%
+  group_by(tmpkey) %>%
+  slice_head() %>%
+  ungroup() %>%
+  select(-tmpkey)
+
 nodes.df <- journal_analysis.tbl
+linked_nodes <- edges.df %>% select(to,from) %>%
+  pivot_longer(cols=c(to,from),names_to=NULL,values_to="id") %>% 
+  group_by(id) %>% slice_head() %>% ungroup()
+nodes_small.df <- nodes.df %>% 
+  semi_join( linked_nodes,by=c("NM_JOURNALID"="id"))
 
-gr.values <-create_graph(
-  nodes_df = df.nodes.values , 
-  edges_df = df.edges.values, 
+
+journals.graph <-create_graph(
+  nodes_df = journal_analysis.tbl %>% 
+    mutate(id=NM_JOURNALID,label=id) %>% relocate(id,label) , 
+  edges_df = edges.df, 
   graph_name="Journal Board Sharing",
-  directed=FALSE)
+ directed=TRUE)
 
-tmp1<- gr.values %>% render_graph()
+journals_linked.graph <-create_graph(
+  nodes_df = nodes_small.df %>% 
+    mutate(id=NM_JOURNALID,label=id) %>% relocate(id,label) , 
+  edges_df = edges.df, 
+  graph_name="Journal Board Sharing - Connected Only",
+  directed=TRUE)
+
+journals.grViz <- journals_linked.graph %>% render_graph()
+#journals.vz <- journals_linked.graph %>% render_graph(output="visNetwork")
+#journals.svg <- journals.graph %>% render_graph(as_svg=TRUE)
+
+journals_linked.tgraph <-  as_tbl_graph(to_igraph(journals_linked.graph))
+journals.tgraph <-  as_tbl_graph(to_igraph(journals.graph))
+
+
+journals_linked.tgraph %>% ggraph(layout="stress") +
+    #geom_edge_fan(aes(color="blue",alpha=.2)) +
+    geom_edge_fan(alpha=.2) +
+    geom_node_point(aes(color=factor(CAT_PUBLISHER)))
+
+
 ```
 
 
