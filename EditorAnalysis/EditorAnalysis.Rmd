@@ -29,7 +29,7 @@ editor_options:
   markdown: 
     wrap: 72
 ---
-
+#Section 2 - Data Processing 
 ```{r label=setup, include=FALSE}
 library(knitr)
 ## options for this document
@@ -65,6 +65,9 @@ library("gt")
 library("ggplot2")
 library("patchwork")
 
+# Core EDA
+
+
 # data retrieval
 library("R.utils")
 library("readxl")
@@ -77,13 +80,65 @@ library("genderdata") # install using devtools::install_github("lmullen/genderda
 library("reticulate") # python geoentity extraction
 
 # analysis
-library("skimr")
 library("ggspatial") # needs libudunits2-dev -- sudo apt-get install libudunits2-dev
                      # sudo apt-get install gdal-bin proj-bin libgdal-dev libproj-dev
 library("rnaturalearth")
 library("rnaturalearthdata")
-library("DescTools")
+library("ggformula")
+library("hhi")
+library("tidymodels")
+
+# network analysis
+library("DiagrammeR")
+library("DiagrammeRsvg")
+library("tidygraph")
+library("igraph")
+library("ggraph")
+library("rsvg") # for exporting graph files -- silent failure from DiagrammeR without it
+
 ```
+```{r display-themes}
+##set themes for look and feel of tables
+
+gt_theme_538 <- function(data,...) {
+  data %>%
+  opt_all_caps()  %>%
+  opt_table_font(
+    font = list(
+      google_font("Chivo"),
+      default_fonts()
+    )
+  ) %>%
+    tab_style(
+      style = cell_borders(
+        sides = "bottom", color = "transparent", weight = px(2)
+      ),
+      locations = cells_body(
+        columns = TRUE,
+        # This is a relatively sneaky way of changing the bottom border
+        # Regardless of data size
+        rows = nrow(data$`_data`)
+      )
+    )  %>% 
+  tab_options(
+    column_labels.background.color = "white",
+    table.border.top.width = px(3),
+    table.border.top.color = "transparent",
+    table.border.bottom.color = "transparent",
+    table.border.bottom.width = px(3),
+    column_labels.border.top.width = px(3),
+    column_labels.border.top.color = "transparent",
+    column_labels.border.bottom.width = px(3),
+    column_labels.border.bottom.color = "black",
+    data_row.padding = px(3),
+    source_notes.font.size = 12,
+    table.font.size = 16,
+    heading.align = "left",
+    ...
+  ) 
+}
+```
+
 ```{r fetch-data, include=FALSE}
 ###
 ### Retrieve raw data from sources
@@ -144,28 +199,25 @@ era_raw.tbl <- read_excel(db.name,2)
 fieldcode_raw.tbl <- read_excel(db.name,3)
 rm(db.name)
 ```
-
-
-```{r data-tops-fetch}
+```{r data-top-fetch}
 ##
-## TOPS
+## TOP
 ## 
 
 target.uri <- "https://osf.io/qatkz/download"
-db.name <- "tops_factor_raw.csv" 
+db.name <- "top_factor_raw.csv" 
 if (doc_refresh_data) {
   download.file(target.uri,db.name)
 }
-tops_factor_raw.tbl <- read_csv(db.name)
+top_factor_raw.tbl <- read_csv(db.name)
 target.uri <- "https://osf.io/y2rr6/download"
-db.name <- "tops_signatory.csv" 
+db.name <- "top_signatory.csv" 
 if (doc_refresh_data) {
   download.file(target.uri,db.name)
 }
-tops_signatory_raw.tbl <- read_csv(db.name)
+top_signatory_raw.tbl <- read_csv(db.name)
 rm(db.name,target.uri)
 ```
-
 ```{r data-clean, include=FALSE}
 ### DOAJ
 ### normalize issn fields in preparation for merging
@@ -178,6 +230,7 @@ doaj.tbl %<>% pivot_longer(cols=c("Journal ISSN (print version)",
 
 ### ERA
 ### normalize by issn, pack subject field
+#TODO: find complementary source of discipline descriptions
 era.tbl <- era_raw.tbl
 era.tbl %<>% select(-c(starts_with("ERA"), ends_with("Name"), starts_with("Foreign")))
 era.tbl %<>% unite("subjects",starts_with("FoR"),sep=",",na.rm=TRUE) %>%
@@ -193,13 +246,13 @@ editors_clean.tbl %<>% mutate(across(-c("issn","date","url"),function(x)str_repl
 editors_clean.tbl %<>%
 mutate(across(-c("issn","date","url"),str_squish)) # clean unicode sequences
 
-### clean tops data
+### clean top data
 
-tops_factor_clean.tbl <- tops_factor_raw.tbl %>%
+top_factor_clean.tbl <- top_factor_raw.tbl %>%
   select(Journal, Issn, Publisher, Total) %>%
   rename(journal=Journal,issn=Issn,topScore=Total, publisher=Publisher)
 
-tops_signatory_clean.tbl <- tops_signatory_raw.tbl %>%
+top_signatory_clean.tbl <- top_signatory_raw.tbl %>%
   rename(journal="Journal Title", publisher="Publisher") %>%
   select(journal,publisher) %>% 
   mutate(issn=NA_character_)
@@ -216,7 +269,6 @@ pubStd = str_to_lower(str_squish((str_replace_all(publisher, regex("\\W+"), " ")
  ) %>% select(journalStd,pubStd,issn)
 
 ```
-
 ```{r data-issnmatch, include=FALSE}
 
 issnClean<-function(db) {
@@ -316,14 +368,14 @@ issnClean<-function(db) {
 }
 
 #debug(issnClean)
-tops_factor_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
-tops_factor.tbl <- issnClean(tops_factor_clean.tbl)
-tops_factor.tbl %>% filter(is.na(issn)) %>% count() %>% pull
-tops_factor.tbl %<>% filter(!is.na(issn))
-tops_signatory_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
-tops_signatory.tbl <- issnClean(tops_signatory_clean.tbl)
-tops_signatory.tbl %>% filter(is.na(issn)) %>% count() %>% pull
-tops_signatory.tbl %<>% filter(!is.na(issn)) %>% mutate(topsSign=TRUE)
+top_factor_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+top_factor.tbl <- issnClean(top_factor_clean.tbl)
+top_factor.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+top_factor.tbl %<>% filter(!is.na(issn))
+top_signatory_clean.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+top_signatory.tbl <- issnClean(top_signatory_clean.tbl)
+top_signatory.tbl %>% filter(is.na(issn)) %>% count() %>% pull
+top_signatory.tbl %<>% filter(!is.na(issn)) %>% mutate(topSign=TRUE)
 
 noissn_ed.tbl <- editors_clean.tbl %>%  filter(is.na(issn)) %>% select(c("journal","publisher","issn")) %>% group_by(journal,publisher) %>% 
   slice_head() %>% ungroup
@@ -345,8 +397,6 @@ editors_issn.tbl %>% filter(is.na(issn)) %>% count() %>% pull
 
 rm(noissn_ed.tbl,duplicate_journals )
 ```
-
-
 ```{r data-merge}
 ### Join editors with journal information
 editors_join.tbl <- editors_issn.tbl
@@ -363,8 +413,8 @@ editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by=
 
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
 
-editors_join.tbl %<>% left_join(tops_factor.tbl %>% select(issn,topScore) ,by=c("issn"))
-editors_join.tbl %<>% left_join(tops_signatory.tbl %>% select(issn,topsSign) ,by=c("issn")) %>% rowwise()  %>% mutate(topsSign=ifelse(is.na(topsSign),is.na(issn),topsSign))
+editors_join.tbl %<>% left_join(top_factor.tbl %>% select(issn,topScore) ,by=c("issn"))
+editors_join.tbl %<>% left_join(top_signatory.tbl %>% select(issn,topSign) ,by=c("issn")) %>% rowwise()  %>% mutate(topSign=ifelse(is.na(topSign),is.na(issn),topSign))
 ```
 
 
@@ -410,7 +460,7 @@ editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = case_when(
   TRUE ~ LS_GIVENNAME
 ))
 ```
-
+# Section 3- Methods
 ```{r data-parse-countries}
 ### extract country using geotext
 editors_parse_c.tbl <- editors_parse.tbl 
@@ -469,14 +519,7 @@ affiliations.tbl %<>% rowwise() %>% mutate(LS_COUNTRY_CHK2 = str_to_title(LS_COU
 
 editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","LS_COUNTRY"), by=c("affiliation"))
 ```
-
-# Methods
-
-## Gender Imputation
-
-
-
-    ```{r code-roles}
+```{r code-roles}
     editors_full.tbl <- editors_parse_c.tbl
     if (!doc_debug) {
         rm("editors_parse.tbl")
@@ -550,25 +593,21 @@ edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
 ```
 
-```{r analysis-prep}
+```{r analysis-prep-editors}
 if (!doc_debug) {
     rm("editors_parse_c.tbl")
 }
 
-if ( doc_debug ) {
-    editors_full.tbl <- read_csv(edcsv.file,
-                             col_types =list(subjects=col_character()) )
-}
-
 editors_analysis.tbl <- editors_full.tbl
 editors_analysis.tbl %<>% rowwise() %>%
-  mutate(CAT_TOP = case_when(
-    ((is.na(topScore)==FALSE) && (topScore > 0)) ~ 3,
-    (is.na(topScore)==FALSE) ~ 2,
-    ((is.na(topsSign)==FALSE) && topsSign) ~ 1,
-    (is.na(topsSign)==FALSE) ~ 0,
+  mutate(FAC_TOP = case_when(
+    ((is.na(topScore)==FALSE) && (topScore > 0)) ~ "score 1+",
+    (is.na(topScore)==FALSE) ~ "score 0",
+    ((is.na(topSign)==FALSE) && topSign) ~ "signatory",
+    (is.na(topSign)==FALSE) ~ "no TOP",
 #    TRUE ~ NA
-  ))
+  )) %>% ungroup() %>%
+  mutate(FAC_TOP= factor(FAC_TOP, levels=c("no TOP", "signatory", "score 0","score 1+"), ordered=TRUE ))
 
 editors_analysis.tbl %<>% mutate (
   FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
@@ -578,8 +617,9 @@ editors_analysis.tbl %<>% mutate (
   IND_MALE = IND_MALE=="male",
   ) %>% 
   rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense, NM_EDID=editor_id) %>%
-  select(NM_JOURNAL, CAT_PUBLISHER,CAT_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, CAT_TOP,NM_EDID) %>% ungroup()
-
+  select(NM_JOURNAL, CAT_PUBLISHER,FAC_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, FAC_TOP,NM_EDID) %>% ungroup()
+```
+```{r analysis-prep-journals}
 ### construct editorial board characteristics
 journal_board_analysis.tbl <- editors_analysis.tbl %>% 
   group_by(NM_JOURNAL,FAC_ROLE) %>% 
@@ -588,20 +628,32 @@ journal_board_analysis.tbl <- editors_analysis.tbl %>%
     LIST_SUBJECTS = unique(str_split(head(LS_SUBJECTS,n=1),',')),
     N_SUBJECTS = ifelse(head(LS_SUBJECTS,n=1)=="MD", 4, length(unlist(LIST_SUBJECTS))), # ERA counts 3 subjects, plus "MD" for multidisciplinary 
   IND_OPEN= head(IND_OPEN,n=1),
-  CAT_TOP=  head(CAT_TOP,n=1),
+  FAC_TOP=  head(FAC_TOP,n=1),
   N_BRD_SIZE = n(),
   LIST_EDID = list(na.omit(NM_EDID)),
-  LIST_ROLEGROUP_COUNTRIES = list(na.omit(LS_COUNTRY)),
+  LIST_ROLEGROUP_COUNTRIES = list(LS_COUNTRY),
   N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
   N_ROLEGROUP_COUNTRIES = na_if(N_ROLEGROUP_COUNTRIES,0),
   PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE)
 ) %>% 
   rowwise() %>%
   mutate(LIST_EDID = ifelse(length(unlist(LIST_EDID))==0, NA, LIST_EDID),
-         LIST_ROLEGROUP_COUNTRIES = 
-           ifelse(length(unlist(LIST_ROLEGROUP_COUNTRIES))==0,NA,LIST_ROLEGROUP_COUNTRIES)
          ) %>%
+  unnest(LIST_ROLEGROUP_COUNTRIES) %>% 
+  rename(COUNTRIES=LIST_ROLEGROUP_COUNTRIES) %>% 
+  nest(LIST_ROLEGROUP_COUNTRIES=c(COUNTRIES)) %>%
   ungroup()
+
+# add labeled major subjects
+
+journal_board_analysis.tbl %<>% 
+  unnest(LIST_SUBJECTS) %>% 
+  rename(CAT_SUBJECT=LIST_SUBJECTS) %>% 
+  mutate(CAT_MAJSUBJECT=substr(CAT_SUBJECT,1,2)) %>%
+  left_join(fieldcode_raw.tbl,by=c(CAT_MAJSUBJECT="FoR Code")) %>% 
+  rename(LABEL_SUBJECT="FoR Description") %>% 
+  mutate(LABEL_SUBJECT= ifelse(str_starts(CAT_MAJSUBJECT,"MD"),"Multidisciplinary",LABEL_SUBJECT)) %>% 
+  nest(LIST_SUBJECTS=c(CAT_SUBJECT,LABEL_SUBJECT,CAT_MAJSUBJECT))
 
 journal_analysis.tbl <- journal_board_analysis.tbl %>%
   group_by(NM_JOURNAL) %>%
@@ -611,14 +663,30 @@ journal_analysis.tbl <- journal_board_analysis.tbl %>%
   slice_head()  %>%
   ungroup() %>% 
   mutate(NM_JOURNALID=seq_len(n()))
+
+# compute HHI
+countries_to_hhi<-function(x) {
+  safe_hhi <- possibly(hhi,otherwise=NA)
+  counts <- 
+    x %>% group_by(COUNTRIES) %>% 
+    count() %>% na.omit %>%
+    ungroup() %>% mutate(total=sum(n)) %>%
+    rowwise() %>% transmute(s=round((n*100)/total)) %>% data.frame()
+  
+  if (nrow(counts)==0) {
+        retval <- NA
+  } else {
+    retval <- safe_hhi(counts)/10000
+  }
+  retval
+}
+
+journal_board_analysis.tbl %<>% rowwise() %>% mutate(PERCENT_HHI = countries_to_hhi(LIST_ROLEGROUP_COUNTRIES))
+
 ```
 ```{r network-gen}
-library("DiagrammeR")
-library("DiagrammeRsvg")
-library("tidygraph")
-library("igraph")
-library("ggraph")
-library("rsvg") # for exporting graph files -- silent failure from DiagrammeR without it
+#TODO: fuzzy network edge detection
+
 edges.df <- journal_analysis.tbl %>% 
   select(LIST_EDID,NM_JOURNALID) %>% 
   unnest(LIST_EDID)
@@ -649,7 +717,6 @@ linked_nodes <- edges.df %>% select(to,from) %>%
 nodes_small.df <- nodes.df %>% 
   semi_join( linked_nodes,by=c("NM_JOURNALID"="id"))
 
-
 journals.graph <-create_graph(
   nodes_df = journal_analysis.tbl %>% 
     mutate(id=NM_JOURNALID,label=id) %>% relocate(id,label) , 
@@ -664,41 +731,59 @@ journals_linked.graph <-create_graph(
   graph_name="Journal Board Sharing - Connected Only",
   directed=TRUE)
 
-journals.grViz <- journals_linked.graph %>% render_graph()
-#journals.vz <- journals_linked.graph %>% render_graph(output="visNetwork")
-#journals.svg <- journals.graph %>% render_graph(as_svg=TRUE)
-
 journals_linked.tgraph <-  as_tbl_graph(to_igraph(journals_linked.graph))
 journals.tgraph <-  as_tbl_graph(to_igraph(journals.graph))
+```
+```{r save-checkpoint}
+save.image(file="checkpoint.RData")
+```
+## Table: Distribution of journals by publisher
+```{r load-checkpoint}
+load(file="checkpoint.RData")
+```
+```{r sec-3-publisher}
+#TODO: replace Desc with ggformula
+journal_analysis.tbl %>% Desc(~CAT_PUBLISHER,data=.)
+```
+# Sec 4.1 Ecosystem Characterization
+## Table: Journal Characteristics by publisher and open status
+```{r table-journal-publisher}
 
-
-journals_linked.tgraph %>% ggraph(layout="stress") +
-    #geom_edge_fan(aes(color="blue",alpha=.2)) +
-    geom_edge_fan(alpha=.2) +
-    geom_node_point(aes(color=factor(CAT_PUBLISHER)))
-
+journal_analysis.tbl %>%
+  unnest(LIST_SUBJECTS) %>% 
+  group_by(CAT_PUBLISHER) %>% 
+  summarize(n_journal=n(),
+         p_oa = sum(IND_OPEN,na.rm=TRUE)/sum(!is.na(IND_OPEN)),
+         p_top = sum(FAC_TOP>"no TOP")/sum(!is.na(FAC_TOP)),
+         mn_boards_all = mean(N_BRD_SIZE,na.rm=TRUE),
+         range_boards_all =paste((range(N_BRD_SIZE, na.rm=TRUE)),collapse="-")
+  ) %>% gt() %>% 
+    cols_label( "n_journal" = "# of journals",
+                "CAT_PUBLISHER" ="",
+                "p_oa"="% open access" , 
+                "p_top"="% open science ",
+                "mn_boards_all"="# members (mean)",
+                "range_boards_all"="[Range]"
+                ) %>%
+    fmt_percent(columns=c("p_oa","p_top"),decimals=0) %>%
+    fmt_number(columns=c("mn_boards_all"),decimals=1) %>%
+    tab_header(title="Journal Characteristics") %>%
+   # tab_source_note( source_note = "Note: Category membership overlaps -- a journals may be assigned up to three disciplines" ) %>%
+    data_color (
+      columns = vars(p_top,p_oa), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
 
 ```
 
-
-## Journal Characteristics
-
-```{r analysis-descriptive-journal}
-journal_analysis.tbl %>% select(-LIST_SUBJECTS) %>% Desc()
-```
-
-## Editor Characteristics
-
-```{r analysis-descriptive-editorial-1}
-editors_analysis.tbl  %>% Desc(formula=~IND_MALE+LS_COUNTRY+FAC_ROLE+IND_OPEN,data=.)
-editors_analysis.tbl  %>% Desc(formula=LS_COUNTRY+FAC_ROLE+IND_MALE~IND_OPEN,data=.)
-editors_analysis.tbl  %>% Desc(formula=IND_OPEN+FAC_ROLE+IND_OPEN %in% FAC_ROLE ~ IND_MALE,data=.)
-```
-
+## Fig: Editor by country
 ```{r analysis-editors-map}
 world.sf <- ne_countries(scale = "medium", returnclass = "sf")
 
-# Todo: track country code non-matches "RE" "UK" "GP" "MQ" "GF" "XK" "AN"
+#TODO: track country code non-matches "RE" "UK" "GP" "MQ" "GF" "XK" "AN"
 ctry_totals<- editors_analysis.tbl %>% group_by(LS_COUNTRY) %>% summarise(n_editors=n()) %>% rename(iso_a2=LS_COUNTRY)
 
 world.sf %<>% left_join(ctry_totals)
@@ -706,80 +791,137 @@ world.sf %<>% left_join(ctry_totals)
 ggplot(data = world.sf) +
     geom_sf(aes(fill = n_editors)) +
         scale_fill_viridis_c(option = "E", trans = "log")
+
+#TODO: Replace Desc with ggformula
+editors_analysis.tbl %>% Desc(~LS_COUNTRY,data=.)
+```
+## Fig: Editor by rolle and gender ; editor by role & country
+```{r}
+#editors_analysis.tbl %>% Desc(FAC_ROLE~IND_MALE,data=.)
+#editors_analysis.tbl %>% gf_percents(~IND_MALE|FAC_ROLE,na.rm)
+editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~IND_MALE)
+editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~LS_COUNTRY)
+
 ```
 
-```{r analysis-edboards}
 
+### Fig: Board interconnectivity
+```{r figure-interconnect}
 
-journal_board_analysis.tbl %>% select(-NM_JOURNAL,-LIST_ROLEGROUP_COUNTRIES,-LIST_SUBJECTS) %>% Desc(~.,data=.)
-p1<-journal_board_analysis.tbl %>%
-  filter(IND_OPEN) %>%
-  Desc(FAC_ROLE~PERCENT_ROLEGROUP_MALE,data=.)
+journals.grViz <- journals_linked.graph %>% render_graph(output="visNetwork")
 
-p2<- journal_board_analysis.tbl %>%
-  filter(!IND_OPEN) %>%
-  Desc(FAC_ROLE~PERCENT_ROLEGROUP_MALE,data=.)
+journals_linked.tgraph %>% ggraph(layout="stress") +
+    geom_edge_fan(alpha=.2) +
+    geom_node_point(aes(color=factor(CAT_PUBLISHER)))
+```
+# Sec 4.2 
 
-plot(p1)
-plot(p2)
-
-journal_board_analysis.tbl %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
+```{r table-journal-discipline}
 
 journal_board_analysis.tbl %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
-
-journal_board_analysis.tbl %>%
-  filter(FAC_ROLE=="chief") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
-journal_board_analysis.tbl %>%
-  filter(FAC_ROLE=="editor") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
-journal_board_analysis.tbl %>%
-  filter(FAC_ROLE=="review") %>%
-  Desc(IND_OPEN~N_ROLEGROUP_COUNTRIES+PERCENT_ROLEGROUP_MALE+N_SUBJECTS,data=.)
-
-
-
-#  Countries & Gender by Discipline
-
-subject.tbl <- journal_board_analysis.tbl %>%
   unnest(LIST_SUBJECTS) %>% 
-  rename(CAT_SUBJECT=LIST_SUBJECTS) %>% 
-  mutate(CAT_MAJSUBJECT=substr(CAT_SUBJECT,1,2)) %>%
-  group_by(CAT_MAJSUBJECT,FAC_ROLE) %>% 
-  summarize(AVG_SUBJROLE_MALE=mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
-            AVG_SUBJROLE_COUNTRIES= mean(N_ROLEGROUP_COUNTRIES,na.rm=TRUE)) %>%
-  left_join(fieldcode_raw.tbl,by=c(CAT_MAJSUBJECT="FoR Code")) %>% 
-  rename(LABEL_SUBJECT="FoR Description") %>% ungroup() %>%
-  mutate(LABEL_SUBJECT= ifelse(str_starts(CAT_MAJSUBJECT,"MD"),"Multidisciplinary",LABEL_SUBJECT))
-
-
-subject.tbl %>% filter(FAC_ROLE=="editor") %>% arrange(AVG_SUBJROLE_MALE) %>%
-  select(AVG_SUBJROLE_MALE,LABEL_SUBJECT) %>% gt()
-
-subject.tbl %>% filter(FAC_ROLE=="editor") %>% arrange(desc(AVG_SUBJROLE_COUNTRIES)) %>%
-  select(AVG_SUBJROLE_COUNTRIES,LABEL_SUBJECT) %>% gt()
-
-lm.res <- journal_board_analysis.tbl %>% 
-  lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_ROLE+N_SUBJECTS,data=.)
-
-summary(lm.res)
-plot(lm.res)
-
+  filter(!is.na(FAC_ROLE)) %>%
+  group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
+  summarize(n_journal=n(),
+         male = mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
+         international =  mean(PERCENT_HHI,na.rm=TRUE),
+       
+  ) %>%
+  pivot_longer(cols=c(male,international),names_to="divtype",values_to="per") %>%
+  pivot_wider(id_cols="LABEL_SUBJECT",
+              names_from=c(FAC_ROLE,divtype),values_from="per") %>%
+  ungroup() %>%
+  gt() %>% 
+    cols_label( "LABEL_SUBJECT"="",
+                "review_male"="Review board: % male" , 
+                "review_international"="Review board: % national concentration",
+                "editor_male"="Editorial board: % male" , 
+                "editor_international"="Editorial board: % national concentration",
+                "chief_male"="Chief editors: % male" , 
+                "chief_international"="Chief editors: % national concentration",
+                ) %>%
+    fmt_percent(columns=matches("male|international"),decimals=0) %>%
+    tab_header(title="Board Diversity by Role and Discipline") %>%
+    tab_source_note( source_note = "Note: Disciplinary membership overlaps." ) %>%
+    data_color (
+      columns = matches("male|international"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
 
 ```
+```{r}
+editors_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
+  summarize(pmale = mean(IND_MALE,na.rm=TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(values_from=pmale, names_from=IND_OPEN) %>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    cols_label( "IND_TOP" = "Top Signatory",
+                "FAC_ROLE"="",
+                "FALSE"="Closed Access" , 
+                "TRUE"="Open Access",
+                ) %>%
+    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    tab_header(title="Percent Male by OA and TOPS status") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
 
-# Results
+```
+```{r}
 
--   Journal: field, OA status
--   Authors: 
+tmp <- journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP"))
+p1<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_OPEN)
+p2<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
+p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
+p4<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
+plot((p1+p2)/(p3+p4))
+```
 
-# Discussion 
-# References {\#references .unnumbered} 
-# Appendix - Supplementary Tables 
-# Exploratory Analysis -- Not For Submission
 
+```{r multivariate}
+lm.res <- journal_board_analysis.tbl %>% 
+  lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_TOP+FAC_ROLE+N_SUBJECTS,data=.)
+
+
+lm.res %>% tidy() %>% gt()
+lm.res %>% glance() %>% gt()
+summary(lm.res) %>% 
+plot(lm.res)
+```
+
+
+```{r journal-cliques}
+
+journals_linked.igraph<-as.igraph(journals_linked.tgraph)
+jcomp <- decompose(journals_linked.igraph,min.vertices=12)
+tmp2 <- as.tibble(igraph::as_data_frame(jcomp[[1]],"vertices"))
+
+# For each cluster
+# Compute publisher, OA, OS status
+# Avg board overlap
+# Max linked individual
+```
+
+
+# Supplementary Materials
+# Exploratory 
+## Ad-Hoc Exploration
+
+
+##standardized exploratory check
 ```{r}
 explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
 ```
