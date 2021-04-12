@@ -87,6 +87,8 @@ library("rnaturalearthdata")
 library("ggformula")
 library("hhi")
 library("tidymodels")
+library("skimr")
+library("DescTools")
 
 # network analysis
 library("DiagrammeR")
@@ -898,7 +900,6 @@ lm.res <- journal_board_analysis.tbl %>%
 
 lm.res %>% tidy() %>% gt()
 lm.res %>% glance() %>% gt()
-summary(lm.res) %>% 
 plot(lm.res)
 ```
 
@@ -906,14 +907,40 @@ plot(lm.res)
 ```{r journal-cliques}
 
 journals_linked.igraph<-as.igraph(journals_linked.tgraph)
-jcomp <- decompose(journals_linked.igraph,min.vertices=12)
-tmp2 <- as.tibble(igraph::as_data_frame(jcomp[[1]],"vertices"))
+jcomp.list <- decompose(journals_linked.igraph)
+jcomp.tib.list <-jcomp.list %>% map(function(x)as.tibble(igraph::as_data_frame(x,what="vertices")))
+jcomp.sizes<-jcomp.tib.list %>% map(nrow) 
+jcomp.sizes %>% unlist %>%  as.tibble %>% group_by(value) %>%
+  count %>% ungroup %>% pivot_wider(names_from=value,values_from=n) %>%
+  gt %>% 
+    tab_header(title="Distribution of Editorial Board Clusters") %>%
+    gt_theme_538() 
+
+clustjournals.tib <- jcomp.tib.list[which(jcomp.sizes>20)] %>% map_dfr(~.x)
+
+clustjournals.tib %>%  count(CAT_PUBLISHER,IND_OPEN,IND_TOP=FAC_TOP>1,sort=TRUE) %>%
+    gt %>% 
+    tab_header(title="Composition of Large Clusters") %>%
+    gt_theme_538()
+
+clustjournals.tib %>% unnest(LIST_SUBJECTS) %>% count(LABEL_SUBJECT,sort=TRUE) %>%
+    gt %>% 
+    tab_header(title="Journal Subject of Large Clusters") %>%
+    gt_theme_538()
+
+clustjournals.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
+   count(n) %>% 
+   gt %>% 
+    cols_label(n="Number of boards",nn="") %>%
+    tab_header(title="Journal Subject of Large Clusters") %>%
+    gt_theme_538()
 
 # For each cluster
 # Compute publisher, OA, OS status
 # Avg board overlap
 # Max linked individual
-```
+```  
+
 
 
 # Supplementary Materials
@@ -927,7 +954,6 @@ explore.ls <-  lapply(ls(pattern="_analysis.tbl"),sym)
 ```
 
 ```{r}
-library(skimr)
 for (i in explore.ls) { cat("****\n"); print(i); cat("****\n"); print(skim(eval(i))) }
 ```
 
