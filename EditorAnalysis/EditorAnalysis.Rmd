@@ -411,6 +411,8 @@ if (!doc_debug) {
 # this applies even where there the issn is missing because we've already tried to repair
 # issn by matching against the doaj database journal title
 
+#TODO: Code publishers by exclusive OA PUBLISHER...
+
 editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by="issn") %>% rename(license="Journal license")  %>% rowwise() %>%  mutate(license = ifelse(is.na(license),"none",license),  IND_openlicense=(license!="none"))
 
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
@@ -537,7 +539,9 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
       mutate(CAT_ROLE = case_when(
         is.na(rolec) ~ "",
       str_detect(rolec,"(In Chief)|(In-Chief)") ~ "chief",
+      str_detect(rolec,"Field Chief Editor") ~ "chief", # Frontiers nomenclature for chief editor
       str_detect(rolec,"Founding Editor") ~ "chief",
+      str_detect(rolec,"Specialty Chief Editor") ~ "editor", # frontiers nomenclature of section editor
       str_detect(rolec,"Associate Editor") ~ "editor",
       str_detect(rolec,"Assistant Editor") ~ "editor",
       str_detect(rolec,"Senior Editor") ~ "editor",
@@ -816,11 +820,11 @@ journals_linked.tgraph %>% ggraph(layout="stress") +
     geom_edge_fan(alpha=.2) +
     geom_node_point(aes(color=factor(CAT_PUBLISHER)))
 ```
-# Sec 4.2 
-
+# Sec 4.2 Correlates of Diversity
+## Board Diversity by Role and discipline
 ```{r table-journal-discipline}
 
-journal_board_analysis.tbl %>%
+boardDiverse.tbl <-  journal_board_analysis.tbl %>%
   unnest(LIST_SUBJECTS) %>% 
   filter(!is.na(FAC_ROLE)) %>%
   group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
@@ -830,9 +834,12 @@ journal_board_analysis.tbl %>%
        
   ) %>%
   pivot_longer(cols=c(male,international),names_to="divtype",values_to="per") %>%
-  pivot_wider(id_cols="LABEL_SUBJECT",
+  mutate(LABEL_SUBJECT=replace_na(LABEL_SUBJECT,"Uncategorized")) %>%
+  ungroup() 
+
+boardDiverse.tbl %>%
+   pivot_wider(id_cols="LABEL_SUBJECT",
               names_from=c(FAC_ROLE,divtype),values_from="per") %>%
-  ungroup() %>%
   gt() %>% 
     cols_label( "LABEL_SUBJECT"="",
                 "review_male"="Review board: % male" , 
@@ -852,6 +859,18 @@ journal_board_analysis.tbl %>%
         domain = c(0,1) ) 
     ) %>% 
     gt_theme_538() 
+
+
+boardDiverse.tbl %>%
+    group_by(LABEL_SUBJECT) %>% mutate(subj_order=min(per,na.rm=TRUE)) %>%
+    ggplot(aes(x= per,y=reorder(LABEL_SUBJECT,subj_order))) +
+    geom_line(aes(group = LABEL_SUBJECT))+
+    geom_point(aes(color=FAC_ROLE), size=4) +
+    facet_wrap(facets=vars(divtype)) +
+     labs(x = "Diversity", y="",
+       title = "Board diversity by journal discipline and role",
+       color = "Role") 
+
 
 ```
 ```{r}
