@@ -435,33 +435,50 @@ if (!doc_debug) {
     rm("editors_clean.tbl")
 }
 
-# create an internal id for each person in the data
-person_ids.tbl <- editors_parse.tbl %>% 
-  group_by(editor,affiliation) %>% 
-  count() %>% ungroup() %>% 
-  filter(n>1) %>% 
-  filter(!is.na(editor)) %>%
-  filter(!is.na(affiliation)) %>% 
-  mutate(editor_id = seq_len(n())) %>%
-  select(-n)
-
-editors_parse.tbl %<>% left_join(person_ids.tbl,by=c("editor","affiliation"))
 
 # first_name() fails on empty string, wrap it
 safe_first_name <- possibly(first_name, otherwise="")
+safe_last_name <- possibly(last_name, otherwise="")
+safe_middle_name <- possibly(middle_name, otherwise="")
+safe_format_reverse <- possibly(format_reverse, otherwise="")
+
 
 # remove honorifics
-editors_parse.tbl %<>% rowwise() %>% mutate( LS_FULLNAME = str_squish(str_replace( `editor`, '(Dr\\.)|(Prof\\.)|(Doctor)|(Professor)|(Dr )|(Prof )', '')))                                    
-editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = safe_first_name(`LS_FULLNAME`))
-                                             
-                 
+editors_parse.tbl %<>% 
+  rowwise() %>% 
+  mutate(LS_FULLNAME = ifelse(str_to_upper(editor)==editor,str_to_title(editor),editor)) %>%
+  mutate(LS_FULLNAME =
+           str_squish(str_replace_all(`LS_FULLNAME`, '(Dr\\.)|(Prof\\.)|(Doctor )|(Professor )|(Dr )|(Prof )| PhD| Ph.D.| MSc| PharmD| PsyD| MPhil| MEd| ScD|\\*', '' ) ) ) %>% 
+  mutate(
+    LS_FULLNAME =  paste(
+  setdiff(
+  str_replace_all(
+    str_squish(
+      unlist(
+        str_split(LS_FULLNAME,",")
+        )
+      ) , 
+    '^([A-Z]|\\-|\\.){3,}$',''),c("")),
+  collapse=", ")
+  )
+
+editors_parse.tbl %<>% 
+  rowwise() %>% 
+  mutate(LS_FULLNAME=ifelse(str_detect(LS_FULLNAME,"^[:alpha:]+[:space:]*,[:space:]*([:alpha:]|\\.)+$"),safe_format_reverse(LS_FULLNAME),LS_FULLNAME)) %>%
+  mutate(
+    LS_INSTITUTION = head(unlist(str_split(affiliation,",")),n=1),
+    LS_FIRSTNAME = safe_first_name(`LS_FULLNAME`),
+    LS_LASTNAME = safe_last_name(`LS_FULLNAME`),
+    LS_MIDDLENAME = safe_middle_name(`LS_FULLNAME`),
+  )
+                                                                  
 #post-cleanup
 # single letter, or ending with a period of comma, is a last name, or abbreviation rather than first
 editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = case_when(
-  LS_GIVENNAME=="" ~ NA_character_,
-  str_length(LS_GIVENNAME)==1 ~ NA_character_,
-  str_detect(LS_GIVENNAME,'.*(\\.|\\,)') ~ NA_character_,
-  TRUE ~ LS_GIVENNAME
+  LS_FIRSTNAME=="" ~ NA_character_,
+  str_length(LS_FIRSTNAME)==1 ~ NA_character_,
+  str_detect(LS_FIRSTNAME,'.*(\\.|\\,)') ~ NA_character_,
+  TRUE ~ LS_FIRSTNAME
 ))
 ```
 # Section 3- Methods
@@ -611,9 +628,29 @@ editors_analysis.tbl %<>% rowwise() %>%
     (is.na(topScore)==FALSE) ~ "score 0",
     ((is.na(topSign)==FALSE) && topSign) ~ "signatory",
     (is.na(topSign)==FALSE) ~ "no TOP",
-#    TRUE ~ NA
   )) %>% ungroup() %>%
   mutate(FAC_TOP= factor(FAC_TOP, levels=c("no TOP", "signatory", "score 0","score 1+"), ordered=TRUE ))
+
+## create an internal id for each person in the data
+
+# person_ids.tbl <- editors_analysis.tbl %>% 
+#   group_by(editor,affiliation) %>% 
+#   filter(!is.na(editor)) %>%
+#   filter(!is.na(affiliation)) %>% 
+#   count() %>% ungroup() %>% 
+#   filter(n>1) %>% 
+#   mutate(editor_id = seq_len(n()))
+
+person_ids.tbl <- editors_analysis.tbl %>% 
+  filter(LS_FULLNAME != "", LS_INSTITUTION !="") %>%
+  group_by(LS_FULLNAME,LS_INSTITUTION) %>%
+  count() %>% ungroup() %>% 
+  filter(n>1) %>% 
+  mutate(editor_id = seq_len(n())) %>%
+  select(-n) %>%
+  ungroup()
+
+editors_analysis.tbl %<>% left_join(person_ids.tbl,by=c("LS_FULLNAME","LS_INSTITUTION"))
 
 editors_analysis.tbl %<>% mutate (
   FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
@@ -682,7 +719,7 @@ countries_to_hhi<-function(x) {
   if (nrow(counts)==0) {
         retval <- NA
   } else {
-    retval <- safe_hhi(counts)/10000
+    retval <- suppressWarnings( safe_hhi(counts)/10000 )
   }
   retval
 }
@@ -801,7 +838,7 @@ ggplot(data = world.sf) +
 #TODO: Replace Desc with ggformula
 editors_analysis.tbl %>% Desc(~LS_COUNTRY,data=.)
 ```
-## Fig: Editor by rolle and gender ; editor by role & country
+## Fig: Editor by role and gender ; editor by role & country
 ```{r}
 #editors_analysis.tbl %>% Desc(FAC_ROLE~IND_MALE,data=.)
 #editors_analysis.tbl %>% gf_percents(~IND_MALE|FAC_ROLE,na.rm)
