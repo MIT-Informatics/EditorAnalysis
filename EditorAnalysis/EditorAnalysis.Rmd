@@ -411,8 +411,6 @@ if (!doc_debug) {
 # this applies even where there the issn is missing because we've already tried to repair
 # issn by matching against the doaj database journal title
 
-#TODO: Code publishers by exclusive OA PUBLISHER...
-
 editors_join.tbl %<>% left_join(doaj.tbl %>% select(issn,"Journal license"), by="issn") %>% rename(license="Journal license")  %>% rowwise() %>%  mutate(license = ifelse(is.na(license),"none",license),  IND_openlicense=(license!="none"))
 
 editors_join.tbl %<>% left_join(era.tbl %>% select(issn,subjects), by=c("issn"))
@@ -450,7 +448,7 @@ editors_parse.tbl %<>%
   mutate(LS_FULLNAME =
            str_squish(str_replace_all(`LS_FULLNAME`, '(Dr\\.)|(Prof\\.)|(Doctor )|(Professor )|(Dr )|(Prof )| PhD| Ph.D.| MSc| PharmD| PsyD| MPhil| MEd| ScD|\\*', '' ) ) ) %>% 
   mutate(
-    LS_FULLNAME =  paste(
+    LS_FULLNAME = ifelse(is.na(LS_FULLNAME),NA,  paste(
   setdiff(
   str_replace_all(
     str_squish(
@@ -460,6 +458,7 @@ editors_parse.tbl %<>%
       ) , 
     '^([A-Z]|\\-|\\.){3,}$',''),c("")),
   collapse=", ")
+  )
   )
 
 editors_parse.tbl %<>% 
@@ -571,7 +570,7 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
         str_detect(rolec,"Scientific Committee") ~ "review",
       str_detect(rolec,"Scientific Advisor") ~ "review",
       str_detect(rolec,"Commissioning Editor") ~ "",
-      str_detect(rolec,"Editorial Office") ~ "",
+      str_detect(rolec,"Editorial Office") ~ "", # Emerald uses this for publisher business
       str_detect(rolec,"Editor") ~ "editor",
         str_detect(rolec,"Advisory") ~ "review",
       str_detect(rolec,"Review") ~ "review",
@@ -587,49 +586,65 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 
 ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
 ### impute gender based on name
-gender_meth_list <- c("ipums","ssa","kantrowitz","genderizer")
-gender_meth <- "ipums"
-#TODO: 
-# - multiple methods analysis
-# - fix genderizer timeouts
+gender_meth_list <- c("ipums","ssa","kantrowitz","genderize")
 
-# gender can fail on genderize method
 
-safer_gender <- function(x,...) {
-  rv <- c(gender=NA,proportion_male=NA)
+# gender can fail on genderize method, return inconsistent number of columns depending on method
+# so standardize it with wrappers
+
+safer_gender <- function(x, ...) {
   rate <- rate_backoff(pause_base = 0.1, pause_min = 0.005, max_times = 4)
   insistent_gender<-insistently(gender,rate)
   
   
   safe_gender <- possibly(insistent_gender, otherwise=NULL)
-  rsg <- safe_gender(x,...)
-  if (c("gender"names(rsh)) {
-    rv <- c(gender=NA,proportion_male=NA)
-  } else if (is.na(rv$gender)) {
-    rv <- c(gender=NA,proportion_male=NA)
-  } else {}
+  rsg <- safe_gender(x, ...)
+  if (is.null(nrow(rsg)) || nrow(rsg)<1) {
+    tmp <- tibble(name=NA,gender=NA,proportion_male=NA_real_)
+  } else if (all(c("gender","proportion_male") %in% colnames(rsg))) {
+    tmp <- rsg %>% select(name,gender,proportion_male)
+  } else if (c("gender") %in% colnames(rsg)) {
+    tmp <- rsg %>% select(name,gender) %>% mutate(proportion_male=NA_real_)
+  } 
   
-  if (!"proportion_male" %in% colnames())
-  rv %<>% select(gender,proportion_male)
+  rv <- left_join(tibble(name=x),tmp,by=c("name"))
+  rv %<>% rowwise() %>% mutate(proportion_male = case_when (
+    is.na(proportion_male)==FALSE ~ proportion_male,
+    gender=="male" ~ 1,
+    gender=="female" ~ 0,
+    is.na(gender) ~ NA_real_,
+    TRUE ~ .5
+  )) %>% ungroup()
   rv
-}
-if (doc_refresh_data){
-  nms.tbl <-  editors_full.tbl %>% 
-    count(`LS_GIVENNAME`) %>%
-    arrange(desc(n)) 
   
+}
+
+
+
+#if (doc_refresh_data){
+if(TRUE) {
+  nms.tbl <-  editors_full.tbl %>%
+    filter(!is.na(LS_GIVENNAME)) %>%
+    group_by(`LS_GIVENNAME`) %>%
+    count(sort=TRUE)
+  
+  nmtmp <- nms.tbl %>% ungroup() %>% select(LS_GIVENNAME) %>%
+     pull()
   
 
-  nms.tbl %<>% rowwise() %>%
-    mutate( LS_GENDER = 
-           safer_gender(`LS_GIVENNAME`,method=gender_meth))
-  save(nms.tbl,file=paste("nms_",gender_meth,".RData",sep=""))
+    nmsgender.tbl <- map_dfr(gender_meth_list,
+                             ~ safer_gender(nmtmp, method=.x) %>% mutate(method=.x))
+  
+  
+  save(nmsgender.tbl,file="nms.RData")
 } else {
-  load( file=paste("nms_",gender_meth,".RData",sep=""))
+  load( file="nms.RData")
 }
+#rm(list=c("nmtmp","nms.tbl"))
 
-
-editors_full.tbl %<>% left_join(nms.tbl %>% select(-n), by=c("LS_GIVENNAME"))
+gender_meth <- "ssa"
+editors_full.tbl %<>% left_join(gender_select.bl <- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,LS_PROPENSITIY_MALE=proportion_male)
+, by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
 ```
@@ -659,28 +674,27 @@ editors_analysis.tbl %<>% rowwise() %>%
 #   filter(n>1) %>% 
 #   mutate(editor_id = seq_len(n()))
 
-person_ids.tbl <- editors_analysis.tbl %>% 
-  filter(LS_FULLNAME != "") %>%
-  #LS_INSTITUTION !="") %>%
-  #group_by(LS_FULLNAME,LS_INSTITUTION) %>%
-    group_by(LS_FULLNAME,affiliation) %>%
+person_ids_full.tbl <- editors_analysis.tbl %>% 
+  filter(!is.na(LS_FULLNAME)) %>%
+  group_by(LS_FULLNAME,LS_INSTITUTION) %>%
   count() %>% ungroup() %>% 
-  filter(n>1) %>% 
   mutate(editor_id = seq_len(n())) %>%
-#  select(-n) %>%
   ungroup()
+
+person_ids.tbl <- person_ids_full.tbl %>% filter(n>1) #%>% select(-n)
 
 editors_analysis.tbl %<>% left_join(person_ids.tbl,by=c("LS_FULLNAME","LS_INSTITUTION"))
 
 editors_analysis.tbl %<>% mutate (
   FAC_ROLE = factor(CAT_ROLE, levels=c("review","editor","chief"), ordered=TRUE ),
+  IND_MALE= LS_GENDER, 
   IND_MALE = na_if(LS_GENDER,"either"),
   IND_MALE = na_if(IND_MALE,""),
   LS_COUNTRY = na_if(LS_COUNTRY,""),
   IND_MALE = IND_MALE=="male",
   ) %>% 
   rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense, NM_EDID=editor_id) %>%
-  select(NM_JOURNAL, CAT_PUBLISHER,FAC_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, FAC_TOP,NM_EDID) %>% ungroup()
+  select(NM_JOURNAL, CAT_PUBLISHER,FAC_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, FAC_TOP,NM_EDID,LS_PROPENSITIY_MALE) %>% ungroup()
 ```
 ```{r analysis-prep-journals}
 ### construct editorial board characteristics
