@@ -62,6 +62,7 @@ if (doc_debug) {
   require("tidylog")
 }
 library("gt")
+library("crosstable")
 library("ggplot2")
 library("patchwork")
 
@@ -586,11 +587,15 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 
 ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
 ### impute gender based on name
-gender_meth_list <- c("ipums","ssa","kantrowitz","genderize")
+gender_meth_list <- c("ipums","ssa","kantrowitz",)
 
 
 # gender can fail on genderize method, return inconsistent number of columns depending on method
 # so standardize it with wrappers
+
+#NOTE: genderizer method has an API limit of 1000/day -- unless a purchased API key is supplied
+# and gender() provides no way of passing in API key, even if you have one -- so ran this as
+# a one-time job, and load results from csv
 
 safer_gender <- function(x, ...) {
   rate <- rate_backoff(pause_base = 0.1, pause_min = 0.005, max_times = 4)
@@ -643,7 +648,7 @@ if(TRUE) {
 #rm(list=c("nmtmp","nms.tbl"))
 
 gender_meth <- "ssa"
-editors_full.tbl %<>% left_join(gender_select.bl <- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,LS_PROPENSITIY_MALE=proportion_male)
+editors_full.tbl %<>% left_join(gender_select.bl <- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,PERCENT_PROPENSITY_MALE=proportion_male)
 , by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
@@ -681,7 +686,7 @@ person_ids_full.tbl <- editors_analysis.tbl %>%
   mutate(editor_id = seq_len(n())) %>%
   ungroup()
 
-person_ids.tbl <- person_ids_full.tbl %>% filter(n>1) #%>% select(-n)
+person_ids.tbl <- person_ids_full.tbl %>% select(-n)
 
 editors_analysis.tbl %<>% left_join(person_ids.tbl,by=c("LS_FULLNAME","LS_INSTITUTION"))
 
@@ -694,7 +699,7 @@ editors_analysis.tbl %<>% mutate (
   IND_MALE = IND_MALE=="male",
   ) %>% 
   rename( NM_JOURNAL=journal, CAT_PUBLISHER=publisher, LS_SUBJECTS = subjects, IND_OPEN = IND_openlicense, NM_EDID=editor_id) %>%
-  select(NM_JOURNAL, CAT_PUBLISHER,FAC_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, FAC_TOP,NM_EDID,LS_PROPENSITIY_MALE) %>% ungroup()
+  select(NM_JOURNAL, CAT_PUBLISHER,FAC_TOP, IND_MALE, IND_OPEN, LS_COUNTRY, LS_SUBJECTS, FAC_ROLE, FAC_TOP,NM_EDID,PERCENT_PROPENSITY_MALE) %>% ungroup()
 ```
 ```{r analysis-prep-journals}
 ### construct editorial board characteristics
@@ -711,7 +716,8 @@ journal_board_analysis.tbl <- editors_analysis.tbl %>%
   LIST_ROLEGROUP_COUNTRIES = list(LS_COUNTRY),
   N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
   N_ROLEGROUP_COUNTRIES = na_if(N_ROLEGROUP_COUNTRIES,0),
-  PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE)
+  PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE),
+  PROPENSITY_ROLEGROUP_MALE = mean(PERCENT_PROPENSITY_MALE,na.rm=TRUE)
 ) %>% 
   rowwise() %>%
   mutate(LIST_EDID = ifelse(length(unlist(LIST_EDID))==0, NA, LIST_EDID),
@@ -736,7 +742,7 @@ journal_analysis.tbl <- journal_board_analysis.tbl %>%
   group_by(NM_JOURNAL) %>%
   mutate(N_JRN_SIZE=sum(N_BRD_SIZE)) %>%
   mutate(LIST_EDID=list(unique( na.omit(unlist(LIST_EDID))))) %>%
-  select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, -LIST_ROLEGROUP_COUNTRIES, -N_JRN_SIZE, -FAC_ROLE) %>% 
+  select(-N_ROLEGROUP_COUNTRIES,-PERCENT_ROLEGROUP_MALE, -LIST_ROLEGROUP_COUNTRIES, -N_BRD_SIZE, -FAC_ROLE) %>% 
   slice_head()  %>%
   ungroup() %>% 
   mutate(NM_JOURNALID=seq_len(n()))
@@ -762,7 +768,7 @@ journal_board_analysis.tbl %<>% rowwise() %>% mutate(PERCENT_HHI = countries_to_
 
 ```
 ```{r network-gen}
-#TODO: fuzzy network edge detection
+#TODO: edge weights by number of shared editors
 
 edges.df <- journal_analysis.tbl %>% 
   select(LIST_EDID,NM_JOURNALID) %>% 
@@ -820,7 +826,8 @@ load(file="checkpoint.RData")
 ```
 ```{r sec-3-publisher}
 #TODO: replace Desc with ggformula
-journal_analysis.tbl %>% Desc(~CAT_PUBLISHER,data=.)
+#journal_analysis.tbl %>% Desc(~CAT_PUBLISHER,data=.)
+journal_analysis.tbl %>% gf_bar(~CAT_PUBLISHER, sort=stat_count()) + coord_flip()
 ```
 # Sec 4.1 Ecosystem Characterization
 ## Table: Journal Characteristics by publisher and open status
@@ -832,8 +839,8 @@ journal_analysis.tbl %>%
   summarize(n_journal=n(),
          p_oa = sum(IND_OPEN,na.rm=TRUE)/sum(!is.na(IND_OPEN)),
          p_top = sum(FAC_TOP>"no TOP")/sum(!is.na(FAC_TOP)),
-         mn_boards_all = mean(N_BRD_SIZE,na.rm=TRUE),
-         range_boards_all =paste((range(N_BRD_SIZE, na.rm=TRUE)),collapse="-")
+         mn_boards_all = mean(N_JRN_SIZE,na.rm=TRUE),
+         range_boards_all =paste((range(N_JRN_SIZE, na.rm=TRUE)),collapse="-")
   ) %>% gt() %>% 
     cols_label( "n_journal" = "# of journals",
                 "CAT_PUBLISHER" ="",
@@ -871,14 +878,34 @@ ggplot(data = world.sf) +
 
 #TODO: Replace Desc with ggformula
 editors_analysis.tbl %>% Desc(~LS_COUNTRY,data=.)
+
+editors_analysis.tbl %<>% mutate(LS_COUNTRY_U = ifelse(is.na(LS_COUNTRY),"Unknown",LS_COUNTRY))
+
+#TODO: Fix crosstable kludge -- cleaner with group_by?
+  edcountry.ct <-  crosstable(editors_analysis.tbl, c(LS_COUNTRY_U), by=FAC_ROLE, margin="none", total="row", showNA="no") 
+ edcountry.gt <- edcountry.ct %>% arrange(desc(as.numeric(Total))) %>% mutate(Percentage=0+as.numeric(Total)/sum(as.numeric(Total))) %>% slice_head(n=20) %>% as_gt 
+  edcountry.gt$"_data"$Percentage=as.numeric(edcountry.gt$"_data"$Percentage)
+ 
+ 
+ edcountry.gt %>% 
+    cols_label( "Percentage"="%", 
+                ) %>%
+    fmt_percent(columns=matches("Percentage"),decimals=0) %>%
+    tab_header(title="Roles by Country") %>%
+    data_color (
+      columns = c("Percentage"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
+  
 ```
 ## Fig: Editor by role and gender ; editor by role & country
 ```{r}
-#editors_analysis.tbl %>% Desc(FAC_ROLE~IND_MALE,data=.)
-#editors_analysis.tbl %>% gf_percents(~IND_MALE|FAC_ROLE,na.rm)
 editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~IND_MALE)
 editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~LS_COUNTRY)
-
+   
 ```
 
 
@@ -969,6 +996,31 @@ editors_analysis.tbl %>%
     ) %>% 
     gt_theme_538() 
 
+editors_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
+  summarize(prop_male = mean(PERCENT_PROPENSITY_MALE,na.rm=TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(values_from=pmale, names_from=IND_OPEN) %>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    cols_label( "IND_TOP" = "Top Signatory",
+                "FAC_ROLE"="",
+                "FALSE"="Closed Access" , 
+                "TRUE"="Open Access",
+                ) %>%
+    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    tab_header(title="Propensity Male by OA and TOPS status") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
+
+
 ```
 ```{r}
 
@@ -980,12 +1032,26 @@ p2<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
 p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
 p4<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
 plot((p1+p2)/(p3+p4))
+
+p1<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_OPEN)
+p2<- tmp %>% gf_dens2(~PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
+p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
+p4<- tmp %>% gf_dens2(~PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
+plot((p1+p2)/(p3+p4))
 ```
 
 
 ```{r multivariate}
 lm.res <- journal_board_analysis.tbl %>% 
   lm(PERCENT_ROLEGROUP_MALE~IND_OPEN+FAC_TOP+FAC_ROLE+N_SUBJECTS,data=.)
+
+
+lm.res %>% tidy() %>% gt()
+lm.res %>% glance() %>% gt()
+plot(lm.res)
+
+lm.res <- journal_board_analysis.tbl %>% 
+  lm(PROPENSITY_ROLEGROUP_MALE~IND_OPEN+FAC_TOP+FAC_ROLE+N_SUBJECTS,data=.)
 
 
 lm.res %>% tidy() %>% gt()
@@ -1018,11 +1084,12 @@ clustjournals.tib %>% unnest(LIST_SUBJECTS) %>% count(LABEL_SUBJECT,sort=TRUE) %
     tab_header(title="Journal Subject of Large Clusters") %>%
     gt_theme_538()
 
+#TODO: Change universe to all journals
 clustjournals.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
    count(n) %>% 
    gt %>% 
-    cols_label(n="Number of boards",nn="") %>%
-    tab_header(title="Journal Subject of Large Clusters") %>%
+    cols_label(n="Number of journals",nn="") %>%
+    tab_header(title="Number of journals served by editors in large clusters") %>%
     gt_theme_538()
 
 # For each cluster
