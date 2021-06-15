@@ -83,6 +83,7 @@ library("reticulate") # python geoentity extraction
 # analysis
 library("ggspatial") # needs libudunits2-dev -- sudo apt-get install libudunits2-dev
                      # sudo apt-get install gdal-bin proj-bin libgdal-dev libproj-dev
+library("rgeos")
 library("rnaturalearth")
 library("rnaturalearthdata")
 library("ggformula")
@@ -587,10 +588,10 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
 
 ```{r gender_imputation, cache=TRUE, dependson=knitr::dep_auto()}
 ### impute gender based on name
-gender_meth_list <- c("ipums","ssa","kantrowitz",)
+gender_meth_list <- c("ipums","ssa","kantrowitz")
 
 
-# gender can fail on genderize method, return inconsistent number of columns depending on method
+# gender is buggy and inconsistent can fail on genderize method, return inconsistent number of columns depending on method, return duplicate rows -- 
 # so standardize it with wrappers
 
 #NOTE: genderizer method has an API limit of 1000/day -- unless a purchased API key is supplied
@@ -611,6 +612,8 @@ safer_gender <- function(x, ...) {
   } else if (c("gender") %in% colnames(rsg)) {
     tmp <- rsg %>% select(name,gender) %>% mutate(proportion_male=NA_real_)
   } 
+  
+  tmp %<>% group_by(name) %>% slice_head(n=1) %>% ungroup()
   
   rv <- left_join(tibble(name=x),tmp,by=c("name"))
   rv %<>% rowwise() %>% mutate(proportion_male = case_when (
@@ -639,17 +642,34 @@ if(TRUE) {
 
     nmsgender.tbl <- map_dfr(gender_meth_list,
                              ~ safer_gender(nmtmp, method=.x) %>% mutate(method=.x))
+    
+    nms_gender_genderize.tbl <- read_csv("genderize_bulk_api_results.csv")
+    nms_gender_genderize.tbl %<>% select(LS_GIVENNAME,gender,genderProbability) %>%
+      mutate(method="genderize",
+             proportion_male = ifelse(gender=="male",genderProbability,1-genderProbability)) %>%
+      select(-genderProbability) %>% rename(name=LS_GIVENNAME)
+    
+    nmsgender.tbl %<>% bind_rows(nms_gender_genderize.tbl)
+    nmsgender.tbl %<>%  mutate( gender =case_when( 
+        is.na(gender) ~ NA_character_,
+        gender=="male" ~"male",
+        gender=="female" ~"female",
+        TRUE ~ NA_character_) ) %>% 
+        mutate(proportion_male= ifelse(is.na(gender),NA_real_,proportion_male))
   
   
   save(nmsgender.tbl,file="nms.RData")
 } else {
   load( file="nms.RData")
+  
 }
 #rm(list=c("nmtmp","nms.tbl"))
 
-gender_meth <- "ssa"
-editors_full.tbl %<>% left_join(gender_select.bl <- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,PERCENT_PROPENSITY_MALE=proportion_male)
-, by=c("LS_GIVENNAME"))
+gender_meth <- "genderize"
+bltmp<- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,PERCENT_PROPENSITY_MALE=proportion_male)
+
+editors_full.tbl %<>% left_join(nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,PERCENT_PROPENSITY_MALE=proportion_male),
+                                      by=c("LS_GIVENNAME"))
 edcsv.file <- "editors_full.csv.gz"
 write_csv(editors_full.tbl,edcsv.file)
 ```
@@ -739,6 +759,7 @@ journal_board_analysis.tbl %<>%
   nest(LIST_SUBJECTS=c(CAT_SUBJECT,LABEL_SUBJECT,CAT_MAJSUBJECT))
 
 journal_analysis.tbl <- journal_board_analysis.tbl %>%
+  filter(!is.na(FAC_ROLE)) %>%
   group_by(NM_JOURNAL) %>%
   mutate(N_JRN_SIZE=sum(N_BRD_SIZE)) %>%
   mutate(LIST_EDID=list(unique( na.omit(unlist(LIST_EDID))))) %>%
@@ -825,7 +846,6 @@ save.image(file="checkpoint.RData")
 load(file="checkpoint.RData")
 ```
 ```{r sec-3-publisher}
-#TODO: replace Desc with ggformula
 #journal_analysis.tbl %>% Desc(~CAT_PUBLISHER,data=.)
 journal_analysis.tbl %>% gf_bar(~CAT_PUBLISHER, sort=stat_count()) + coord_flip()
 ```
@@ -871,7 +891,6 @@ world.sf <- ne_countries(scale = "medium", returnclass = "sf")
 ctry_totals<- editors_analysis.tbl %>% group_by(LS_COUNTRY) %>% summarise(n_editors=n()) %>% rename(iso_a2=LS_COUNTRY)
 
 world.sf %<>% left_join(ctry_totals)
-
 ggplot(data = world.sf) +
     geom_sf(aes(fill = n_editors)) +
         scale_fill_viridis_c(option = "E", trans = "log")
@@ -903,7 +922,7 @@ editors_analysis.tbl %<>% mutate(LS_COUNTRY_U = ifelse(is.na(LS_COUNTRY),"Unknow
 ```
 ## Fig: Editor by role and gender ; editor by role & country
 ```{r}
-editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~IND_MALE)
+editors_analysis.tbl %>% mutate(IND_FEMALE=!IND_MALE) %>% gf_percents(~FAC_ROLE,fill=~IND_FEMALE)
 editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~LS_COUNTRY)
    
 ```
@@ -927,24 +946,26 @@ boardDiverse.tbl <-  journal_board_analysis.tbl %>%
   filter(!is.na(FAC_ROLE)) %>%
   group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
   summarize(n_journal=n(),
-         male = mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
-         international =  mean(PERCENT_HHI,na.rm=TRUE),
+         #male = mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
+         male = mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE),
+         international =  1-mean(PERCENT_HHI,na.rm=TRUE),
        
   ) %>%
-  pivot_longer(cols=c(male,international),names_to="divtype",values_to="per") %>%
-  mutate(LABEL_SUBJECT=replace_na(LABEL_SUBJECT,"Uncategorized")) %>%
-  ungroup() 
+  mutate(female=1-male) %>%
+  ungroup %>% select(-male) %>%
+  pivot_longer(cols=c(female,international),names_to="divtype",values_to="per") %>%
+  mutate(LABEL_SUBJECT=replace_na(LABEL_SUBJECT,"Uncategorized")) 
 
 boardDiverse.tbl %>%
    pivot_wider(id_cols="LABEL_SUBJECT",
               names_from=c(FAC_ROLE,divtype),values_from="per") %>%
   gt() %>% 
     cols_label( "LABEL_SUBJECT"="",
-                "review_male"="Review board: % male" , 
+                "review_female"="Review board: % female" , 
                 "review_international"="Review board: % national concentration",
-                "editor_male"="Editorial board: % male" , 
+                "editor_female"="Editorial board: % female" , 
                 "editor_international"="Editorial board: % national concentration",
-                "chief_male"="Chief editors: % male" , 
+                "chief_female"="Chief editors: % female" , 
                 "chief_international"="Chief editors: % national concentration",
                 ) %>%
     fmt_percent(columns=matches("male|international"),decimals=0) %>%
@@ -958,9 +979,12 @@ boardDiverse.tbl %>%
     ) %>% 
     gt_theme_538() 
 
+subj_order <-  boardDiverse.tbl %>%
+  group_by(LABEL_SUBJECT) %>% mutate(subj_order=max(per[which(divtype=="female")],na.rm=TRUE)) %>%
+  pull(subj_order)
 
 boardDiverse.tbl %>%
-    group_by(LABEL_SUBJECT) %>% mutate(subj_order=min(per,na.rm=TRUE)) %>%
+    group_by(LABEL_SUBJECT) %>% 
     ggplot(aes(x= per,y=reorder(LABEL_SUBJECT,subj_order))) +
     geom_line(aes(group = LABEL_SUBJECT))+
     geom_point(aes(color=FAC_ROLE), size=4) +
@@ -999,10 +1023,11 @@ editors_analysis.tbl %>%
 editors_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
   group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
   summarize(prop_male = mean(PERCENT_PROPENSITY_MALE,na.rm=TRUE)) %>%
   ungroup() %>%
-  pivot_wider(values_from=pmale, names_from=IND_OPEN) %>%
+  pivot_wider(values_from=prop_male, names_from=IND_OPEN) %>%
   group_by(IND_TOP) %>%
   gt() %>% 
     cols_label( "IND_TOP" = "Top Signatory",
@@ -1034,9 +1059,9 @@ p4<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
 plot((p1+p2)/(p3+p4))
 
 p1<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_OPEN)
-p2<- tmp %>% gf_dens2(~PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
+p2<- tmp %>% gf_dens2(~1-PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
 p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
-p4<- tmp %>% gf_dens2(~PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
+p4<- tmp %>% gf_dens2(~1-PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
 plot((p1+p2)/(p3+p4))
 ```
 
@@ -1073,6 +1098,8 @@ jcomp.sizes %>% unlist %>%  as.tibble %>% group_by(value) %>%
     gt_theme_538() 
 
 clustjournals.tib <- jcomp.tib.list[which(jcomp.sizes>20)] %>% map_dfr(~.x)
+clustjournals_all.tib <- jcomp.tib.list[which(jcomp.sizes>2)] %>% map_dfr(~.x)
+
 
 clustjournals.tib %>%  count(CAT_PUBLISHER,IND_OPEN,IND_TOP=FAC_TOP>1,sort=TRUE) %>%
     gt %>% 
@@ -1084,13 +1111,18 @@ clustjournals.tib %>% unnest(LIST_SUBJECTS) %>% count(LABEL_SUBJECT,sort=TRUE) %
     tab_header(title="Journal Subject of Large Clusters") %>%
     gt_theme_538()
 
-#TODO: Change universe to all journals
-clustjournals.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
+clustjournals_all.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
    count(n) %>% 
+   filter(n>1) %>% 
    gt %>% 
     cols_label(n="Number of journals",nn="") %>%
-    tab_header(title="Number of journals served by editors in large clusters") %>%
+    tab_header(title="Number of journals served by repeat editors") %>%
     gt_theme_538()
+
+clustjournals_all.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
+   count(n) %>% 
+   filter(n>1) %>% 
+  summarize(n=sum(n))
 
 # For each cluster
 # Compute publisher, OA, OS status
@@ -1098,6 +1130,28 @@ clustjournals.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
 # Max linked individual
 ```  
 
+```{r indiveditors}
+multied.tib <- clustjournals_all.tib %>% 
+  unnest(LIST_EDID) %>% 
+  count(LIST_EDID,sort=TRUE) %>%
+  filter(n>5) %>% 
+  left_join(person_ids.tbl, by=c("LIST_EDID"="editor_id")) %>%
+  left_join(editors_full.tbl) %>% relocate(CAT_ROLE,role)
+
+
+multiedan.tib <- clustjournals_all.tib %>%   unnest(LIST_EDID) %>% 
+  count(LIST_EDID,sort=TRUE) %>%
+  filter(n>5) %>% 
+  left_join(editors_analysis.tbl,by=c("LIST_EDID"="NM_EDID"))
+
+
+  
+
+emerald.tib <- editors_full.tbl %>% filter(str_detect(LS_INSTITUTION,"Emerald")) 
+       
+multied.tib
+emerald.tib
+```
 
 
 # Supplementary Materials
