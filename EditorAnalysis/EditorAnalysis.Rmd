@@ -99,48 +99,6 @@ library("tidygraph")
 library("igraph")
 library("ggraph")
 library("rsvg") # for exporting graph files -- silent failure from DiagrammeR without it
-
-```
-```{r display-themes}
-##set themes for look and feel of tables
-
-gt_theme_538 <- function(data,...) {
-  data %>%
-  opt_all_caps()  %>%
-  opt_table_font(
-    font = list(
-      google_font("Chivo"),
-      default_fonts()
-    )
-  ) %>%
-    tab_style(
-      style = cell_borders(
-        sides = "bottom", color = "transparent", weight = px(2)
-      ),
-      locations = cells_body(
-        columns = TRUE,
-        # This is a relatively sneaky way of changing the bottom border
-        # Regardless of data size
-        rows = nrow(data$`_data`)
-      )
-    )  %>% 
-  tab_options(
-    column_labels.background.color = "white",
-    table.border.top.width = px(3),
-    table.border.top.color = "transparent",
-    table.border.bottom.color = "transparent",
-    table.border.bottom.width = px(3),
-    column_labels.border.top.width = px(3),
-    column_labels.border.top.color = "transparent",
-    column_labels.border.bottom.width = px(3),
-    column_labels.border.bottom.color = "black",
-    data_row.padding = px(3),
-    source_notes.font.size = 12,
-    table.font.size = 16,
-    heading.align = "left",
-    ...
-  ) 
-}
 ```
 
 ```{r fetch-data, include=FALSE}
@@ -485,6 +443,7 @@ editors_parse.tbl %<>% rowwise() %>% mutate(LS_GIVENNAME = case_when(
 # Section 3- Methods
 ```{r data-parse-countries}
 ### extract country using geotext
+#TODO: check IRR 
 editors_parse_c.tbl <- editors_parse.tbl 
 if (!doc_debug) {
     rm("editors_join.tbl")
@@ -665,6 +624,8 @@ if(TRUE) {
 }
 #rm(list=c("nmtmp","nms.tbl"))
 
+#TODO: missing genderize ids, appendix with alternative SSA/IPUMS scores
+
 gender_meth <- "genderize"
 bltmp<- nmsgender.tbl %>% filter(method==gender_meth) %>% select(name,gender,proportion_male) %>% rename(LS_GIVENNAME=name,LS_GENDER=gender,PERCENT_PROPENSITY_MALE=proportion_male)
 
@@ -841,13 +802,115 @@ journals.tgraph <-  as_tbl_graph(to_igraph(journals.graph))
 ```{r save-checkpoint}
 save.image(file="checkpoint.RData")
 ```
+
 ## Table: Distribution of journals by publisher
 ```{r load-checkpoint}
 load(file="checkpoint.RData")
 ```
+```{r ggplot-theming}
+library(ggthemes)
+library(tvthemes)
+library(ggsci)
+library(extrafont)
+
+import_simpsons() ## shows location of font for installation
+loadfonts()
+theme_set(theme_simpsons(text.font="Akbar"))
+theme_set(theme_fivethirtyeight(base_size = 12, base_family = "sans"))
+theme_set(theme_tufte(base_size = 11, base_family = "serif", ticks = TRUE))
+
+
+scale_color_my_cont <- function(...) {
+  #tvthemes::scale_color_simpsons(...,type="continuous")
+    scale_color_continuous_tableau( ...)
+
+}
+scale_color_my_dis <- function(...) {
+  #tvthemes::scale_color_simpsons(...,type="discrete")
+    scale_color_tableau(...)
+}
+scale_fill_my_cont <- function(...) {
+  #tvthemes::scale_fill_simpsons(...,type="continuous")
+    scale_fill_continuous_tableau( ...)
+
+}
+scale_fill_my_dis <- function(...) {
+  #tvthemes::scale_fill_simpsons(...,type="discrete")
+    scale_fill_tableau( ...)
+
+}
+
+options(ggplot2.continuous.colour=scale_color_my_cont)
+options(ggplot2.continuous.fill=scale_fill_my_cont)
+options(ggplot2.binned.colour=scale_color_my_cont)
+options(ggplot2.binned.fill=scale_fill_my_cont)
+options(ggplot2.discrete.colour=scale_color_my_dis)
+options(ggplot2.discrete.fill=scale_fill_my_dis)
+
+
+gt_theme_538 <- function(data,...) {
+  data %>%
+  opt_all_caps()  %>%
+  opt_table_font(
+    font = list(
+      google_font("Chivo"),
+      default_fonts()
+    )
+  ) %>%
+    tab_style(
+      style = cell_borders(
+        sides = "bottom", color = "transparent", weight = px(2)
+      ),
+      locations = cells_body(
+        columns = everything(),
+        # This is a relatively sneaky way of changing the bottom border
+        # Regardless of data size
+        rows = nrow(data$`_data`)
+      )
+    )  %>% 
+  tab_options(
+    column_labels.background.color = "white",
+    table.border.top.width = px(3),
+    table.border.top.color = "transparent",
+    table.border.bottom.color = "transparent",
+    table.border.bottom.width = px(3),
+    column_labels.border.top.width = px(3),
+    column_labels.border.top.color = "transparent",
+    column_labels.border.bottom.width = px(3),
+    column_labels.border.bottom.color = "black",
+    data_row.padding = px(3),
+    source_notes.font.size = 12,
+    table.font.size = 16,
+    heading.align = "left",
+    ...
+  ) 
+}
+
+options(gt.theme=gt_theme_538)
+
+gt_t<-function(...) {
+  thm <- options("gt.theme")$gt.theme
+  if (is.null(thm)) {
+    return(gt::gt(...))
+  } else {
+    return(gt::gt(...) %>% thm)
+  }
+}
+
+ggplot_t <- function(...) {
+  return( ggplot2::ggplot(...) + scale_fill_discrete() + scale_color_discrete())
+}
+
+gt<-gt_t
+ggplot<-ggplot_t
+
+```
+
 ```{r sec-3-publisher}
-#journal_analysis.tbl %>% Desc(~CAT_PUBLISHER,data=.)
-journal_analysis.tbl %>% gf_bar(~CAT_PUBLISHER, sort=stat_count()) + coord_flip()
+
+                                
+journal_analysis.tbl  %>% gf_bar(~fct_infreq(CAT_PUBLISHER)) + aes(x=desc(CAT_PUBLISHER)) + coord_flip()  
+
 ```
 # Sec 4.1 Ecosystem Characterization
 ## Table: Journal Characteristics by publisher and open status
@@ -861,7 +924,7 @@ journal_analysis.tbl %>%
          p_top = sum(FAC_TOP>"no TOP")/sum(!is.na(FAC_TOP)),
          mn_boards_all = mean(N_JRN_SIZE,na.rm=TRUE),
          range_boards_all =paste((range(N_JRN_SIZE, na.rm=TRUE)),collapse="-")
-  ) %>% gt() %>% 
+  ) %>% gt_t() %>% 
     cols_label( "n_journal" = "# of journals",
                 "CAT_PUBLISHER" ="",
                 "p_oa"="% open access" , 
@@ -878,22 +941,22 @@ journal_analysis.tbl %>%
       colors = scales::col_numeric( 
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
+    ) 
 
 ```
 
 ## Fig: Editor by country
 ```{r analysis-editors-map}
+
+
 world.sf <- ne_countries(scale = "medium", returnclass = "sf")
 
 #TODO: track country code non-matches "RE" "UK" "GP" "MQ" "GF" "XK" "AN"
 ctry_totals<- editors_analysis.tbl %>% group_by(LS_COUNTRY) %>% summarise(n_editors=n()) %>% rename(iso_a2=LS_COUNTRY)
 
-world.sf %<>% left_join(ctry_totals)
-ggplot(data = world.sf) +
-    geom_sf(aes(fill = n_editors)) +
-        scale_fill_viridis_c(option = "E", trans = "log")
+world.sf %<>% left_join(ctry_totals) 
+
+ggplot(data = world.sf) + geom_sf(aes(fill = n_editors)) + scale_fill_continuous( trans = "log")
 
 #TODO: Replace Desc with ggformula
 editors_analysis.tbl %>% Desc(~LS_COUNTRY,data=.)
@@ -902,7 +965,8 @@ editors_analysis.tbl %<>% mutate(LS_COUNTRY_U = ifelse(is.na(LS_COUNTRY),"Unknow
 
 #TODO: Fix crosstable kludge -- cleaner with group_by?
   edcountry.ct <-  crosstable(editors_analysis.tbl, c(LS_COUNTRY_U), by=FAC_ROLE, margin="none", total="row", showNA="no") 
- edcountry.gt <- edcountry.ct %>% arrange(desc(as.numeric(Total))) %>% mutate(Percentage=0+as.numeric(Total)/sum(as.numeric(Total))) %>% slice_head(n=20) %>% as_gt 
+  
+ edcountry.gt <- edcountry.ct %>% arrange(desc(as.numeric(Total))) %>% mutate(Percentage=0+as.numeric(Total)/sum(as.numeric(Total))) %>% slice_head(n=20) %>% crosstable::as_gt()
   edcountry.gt$"_data"$Percentage=as.numeric(edcountry.gt$"_data"$Percentage)
  
  
@@ -935,7 +999,8 @@ journals.grViz <- journals_linked.graph %>% render_graph(output="visNetwork")
 
 journals_linked.tgraph %>% ggraph(layout="stress") +
     geom_edge_fan(alpha=.2) +
-    geom_node_point(aes(color=factor(CAT_PUBLISHER)))
+    geom_node_point(aes(color=factor(CAT_PUBLISHER))) + scale_color_viridis_d()
+  
 ```
 # Sec 4.2 Correlates of Diversity
 ## Board Diversity by Role and discipline
@@ -983,7 +1048,11 @@ subj_order <-  boardDiverse.tbl %>%
   group_by(LABEL_SUBJECT) %>% mutate(subj_order=max(per[which(divtype=="female")],na.rm=TRUE)) %>%
   pull(subj_order)
 
-boardDiverse.tbl %>%
+
+okabe <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+  boardDiverse.tbl %>%
     group_by(LABEL_SUBJECT) %>% 
     ggplot(aes(x= per,y=reorder(LABEL_SUBJECT,subj_order))) +
     geom_line(aes(group = LABEL_SUBJECT))+
@@ -994,31 +1063,11 @@ boardDiverse.tbl %>%
        color = "Role") 
 
 
+
+
 ```
 ```{r}
-editors_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
-  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
-  summarize(pmale = mean(IND_MALE,na.rm=TRUE)) %>%
-  ungroup() %>%
-  pivot_wider(values_from=pmale, names_from=IND_OPEN) %>%
-  group_by(IND_TOP) %>%
-  gt() %>% 
-    cols_label( "IND_TOP" = "Top Signatory",
-                "FAC_ROLE"="",
-                "FALSE"="Closed Access" , 
-                "TRUE"="Open Access",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Percent Male by OA and TOPS status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
+
 
 editors_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
@@ -1036,7 +1085,7 @@ editors_analysis.tbl %>%
                 "TRUE"="Open Access",
                 ) %>%
     fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Propensity Male by OA and TOPS status") %>%
+    tab_header(title="Editor Proportion Male by OA and TOPS status") %>%
     data_color (
       columns = matches("FALSE|TRUE"), 
       colors = scales::col_numeric( 
@@ -1044,6 +1093,59 @@ editors_analysis.tbl %>%
         domain = c(0,1) ) 
     ) %>% 
     gt_theme_538() 
+
+journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
+  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
+  summarize(prop_male = mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(values_from=prop_male, names_from=IND_OPEN) %>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    cols_label( "IND_TOP" = "Top Signatory",
+                "FAC_ROLE"="",
+                "FALSE"="Closed Access" , 
+                "TRUE"="Open Access",
+                ) %>%
+    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    tab_header(title="Board Proportion Male by OA and TOPS status") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
+
+
+journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
+  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
+  summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(values_from=ihhi, names_from=IND_OPEN) %>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    cols_label( "IND_TOP" = "Top Signatory",
+                "FAC_ROLE"="",
+                "FALSE"="Closed Access" , 
+                "TRUE"="Open Access",
+                ) %>%
+    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    tab_header(title="Board International Diversity by OA and TOPS status") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
+
+
 
 
 ```
@@ -1280,3 +1382,4 @@ try ({
   })
 }
 ```
+
