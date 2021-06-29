@@ -924,7 +924,7 @@ journal_analysis.tbl %>%
          p_top = sum(FAC_TOP>"no TOP")/sum(!is.na(FAC_TOP)),
          mn_boards_all = mean(N_JRN_SIZE,na.rm=TRUE),
          range_boards_all =paste((range(N_JRN_SIZE, na.rm=TRUE)),collapse="-")
-  ) %>% gt_t() %>% 
+  ) %>% gt() %>% 
     cols_label( "n_journal" = "# of journals",
                 "CAT_PUBLISHER" ="",
                 "p_oa"="% open access" , 
@@ -983,12 +983,22 @@ editors_analysis.tbl %<>% mutate(LS_COUNTRY_U = ifelse(is.na(LS_COUNTRY),"Unknow
     ) %>% 
     gt_theme_538() 
   
+ 
+ # percentage of 20 countries
+ as.tibble(edcountry.ct) %>% select(variable,Total) %>% mutate(Total=as.numeric(Total)) %>% slice_max(Total,n=20) %>% summarize(sum(Total)) %>% pull / as.tibble(edcountry.ct) %>% select(variable,Total) %>% mutate(Total=as.numeric(Total)) %>% summarize(sum(Total)) %>% pull
 ```
 ## Fig: Editor by role and gender ; editor by role & country
 ```{r}
 editors_analysis.tbl %>% mutate(IND_FEMALE=!IND_MALE) %>% gf_percents(~FAC_ROLE,fill=~IND_FEMALE)
-editors_analysis.tbl %>% gf_percents(~FAC_ROLE,fill=~LS_COUNTRY)
+editors_analysis.tbl %>% slice_sample(n=1000) %>% gf_percents(~FAC_ROLE,fill=~LS_COUNTRY)
    
+# identified gender
+ (editors_analysis.tbl %>% filter(!is.na(IND_MALE)) %>% count ) / nrow(editors_analysis.tbl)
+ editors_analysis.tbl %>% filter(!is.na(IND_MALE)) %>% filter(!is.na(FAC_ROLE))  %>% crosstable(cols=c(IND_MALE)) %>% as_gt()
+ 
+  editors_analysis.tbl %>% filter(!is.na(IND_MALE)) %>% filter(!is.na(FAC_ROLE))  %>% crosstable(cols=c(IND_MALE),by=FAC_ROLE, margin="column",total="column") %>% as_gt()
+
+ 
 ```
 
 
@@ -1069,23 +1079,43 @@ okabe <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#C
 ```{r}
 
 
-editors_analysis.tbl %>% 
+journal_board_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
-  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
-  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
-  summarize(prop_male = mean(PERCENT_PROPENSITY_MALE,na.rm=TRUE)) %>%
+  group_by(IND_OPEN,FAC_ROLE) %>%
+  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
   ungroup() %>%
-  pivot_wider(values_from=prop_male, names_from=IND_OPEN) %>%
-  group_by(IND_TOP) %>%
+  pivot_wider(values_from=prop_female, names_from=IND_OPEN) %>%
   gt() %>% 
-    cols_label( "IND_TOP" = "Top Signatory",
+    cols_label( 
                 "FAC_ROLE"="",
                 "FALSE"="Closed Access" , 
                 "TRUE"="Open Access",
                 ) %>%
     fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Editor Proportion Male by OA and TOPS status") %>%
+    tab_header(title="Board Proportion Female by OA   status") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() 
+
+
+journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  group_by(IND_OPEN,FAC_ROLE) %>%
+  summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(values_from=ihhi, names_from=IND_OPEN) %>%
+  gt() %>% 
+    cols_label( 
+                "FAC_ROLE"="",
+                "FALSE"="Closed Access" , 
+                "TRUE"="Open Access",
+                ) %>%
+    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    tab_header(title="Board International Diversity by OA  status") %>%
     data_color (
       columns = matches("FALSE|TRUE"), 
       colors = scales::col_numeric( 
@@ -1099,9 +1129,9 @@ journal_board_analysis.tbl %>%
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
   mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
   group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
-  summarize(prop_male = mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
   ungroup() %>%
-  pivot_wider(values_from=prop_male, names_from=IND_OPEN) %>%
+  pivot_wider(values_from=prop_female, names_from=IND_OPEN) %>%
   group_by(IND_TOP) %>%
   gt() %>% 
     cols_label( "IND_TOP" = "Top Signatory",
@@ -1110,7 +1140,7 @@ journal_board_analysis.tbl %>%
                 "TRUE"="Open Access",
                 ) %>%
     fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board Proportion Male by OA and TOPS status") %>%
+    tab_header(title="Board Proportion Female by OA and TOPS status") %>%
     data_color (
       columns = matches("FALSE|TRUE"), 
       colors = scales::col_numeric( 
@@ -1144,6 +1174,7 @@ journal_board_analysis.tbl %>%
         domain = c(0,1) ) 
     ) %>% 
     gt_theme_538() 
+
 
 
 
@@ -1230,6 +1261,9 @@ clustjournals_all.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
 # Compute publisher, OA, OS status
 # Avg board overlap
 # Max linked individual
+
+# % of journals in clusters between 2-3
+jcomp.sizes %>% unlist %>%  as.tibble %>% group_by(value) %>% summarize(v=sum(value)) %>% slice_head(n=2) %>% summarize(sum(v)) / dim(journal_analysis.tbl)[1]
 ```  
 
 ```{r indiveditors}
