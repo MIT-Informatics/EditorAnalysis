@@ -695,6 +695,7 @@ journal_board_analysis.tbl <- editors_analysis.tbl %>%
   N_BRD_SIZE = n(),
   LIST_EDID = list(na.omit(NM_EDID)),
   LIST_ROLEGROUP_COUNTRIES = list(LS_COUNTRY),
+  LIST_ROLEGROUP_PROPENSITY_MALE = list(PERCENT_PROPENSITY_MALE),
   N_ROLEGROUP_COUNTRIES= length(unique(unlist(LIST_ROLEGROUP_COUNTRIES))),
   N_ROLEGROUP_COUNTRIES = na_if(N_ROLEGROUP_COUNTRIES,0),
   PERCENT_ROLEGROUP_MALE = mean(IND_MALE,na.rm=TRUE),
@@ -732,6 +733,9 @@ journal_analysis.tbl <- journal_board_analysis.tbl %>%
 # compute HHI
 countries_to_hhi<-function(x) {
   safe_hhi <- possibly(hhi,otherwise=NA)
+  if (!inherits(x,"data.frame")) {
+    x <- tibble(COUNTRIES=x)
+  }
   counts <- 
     x %>% group_by(COUNTRIES) %>% 
     count() %>% na.omit %>%
@@ -1025,29 +1029,49 @@ journals_linked.tgraph %>% ggraph(layout="stress") +
 boardDiverse.tbl <-  journal_board_analysis.tbl %>%
   unnest(LIST_SUBJECTS) %>% 
   filter(!is.na(FAC_ROLE)) %>%
+  filter(FAC_ROLE!="chief") %>%
   group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
-  summarize(n_journal=n(),
-         #male = mean(PERCENT_ROLEGROUP_MALE,na.rm=TRUE),
-         male = mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE),
+  summarize(
+         female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE),
          international =  1-mean(PERCENT_HHI,na.rm=TRUE),
        
-  ) %>%
-  mutate(female=1-male) %>%
-  ungroup %>% select(-male) %>%
-  pivot_longer(cols=c(female,international),names_to="divtype",values_to="per") %>%
-  mutate(LABEL_SUBJECT=replace_na(LABEL_SUBJECT,"Uncategorized")) 
+  ) %>% ungroup()
+
+
+# pool chief editors across field for diversity calculation
+boardChief_1.tbl <- journal_board_analysis.tbl %>%
+  filter(FAC_ROLE=="chief") %>% 
+  unnest(LIST_SUBJECTS) %>% 
+  unnest(LIST_ROLEGROUP_PROPENSITY_MALE) %>% 
+  group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
+  summarize(female=1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+  ungroup()
+
+boardChief_2.tbl <- journal_board_analysis.tbl %>%
+  filter(FAC_ROLE=="chief") %>% 
+  unnest(LIST_SUBJECTS) %>% 
+  unnest(LIST_ROLEGROUP_COUNTRIES) %>% 
+  group_by(LABEL_SUBJECT,FAC_ROLE) %>% 
+  summarize(international =1-countries_to_hhi(COUNTRIES)) %>%
+  ungroup()
+
+boardDiverse.tbl %<>% bind_rows(left_join(boardChief_1.tbl,boardChief_2.tbl)) %>%
+ pivot_longer(cols=c(female,international),names_to="divtype",values_to="per") %>%
+  mutate(LABEL_SUBJECT=replace_na(LABEL_SUBJECT,"Uncategorized")) %>%
+  arrange(LABEL_SUBJECT,FAC_ROLE,divtype)
+
 
 boardDiverse.tbl %>%
    pivot_wider(id_cols="LABEL_SUBJECT",
-              names_from=c(FAC_ROLE,divtype),values_from="per") %>%
+              names_from=c(FAC_ROLE,divtype),values_from="per")%>%
   gt() %>% 
     cols_label( "LABEL_SUBJECT"="",
                 "review_female"="Review board: % female" , 
-                "review_international"="Review board: % national concentration",
+                "review_international"="Review board: % national diversity",
                 "editor_female"="Editorial board: % female" , 
-                "editor_international"="Editorial board: % national concentration",
+                "editor_international"="Editorial board: % national diversity",
                 "chief_female"="Chief editors: % female" , 
-                "chief_international"="Chief editors: % national concentration",
+                "chief_international"="Chief editors: % national diversity",
                 ) %>%
     fmt_percent(columns=matches("male|international"),decimals=0) %>%
     tab_header(title="Board Diversity by Role and Discipline") %>%
@@ -1065,7 +1089,6 @@ subj_order <-  boardDiverse.tbl %>%
   pull(subj_order)
 
 
-okabe <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
 
   boardDiverse.tbl %>%
@@ -1076,7 +1099,7 @@ okabe <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#C
     facet_wrap(facets=vars(divtype)) +
      labs(x = "Diversity", y="",
        title = "Board diversity by journal discipline and role",
-       color = "Role") 
+       color = "Role", caption="Note: Chief editors are pooled across discipline.") 
 
 
 
@@ -1179,7 +1202,7 @@ journal_board_analysis.tbl %>%
     gt_theme_538() 
 
 journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
+  filter(!is.na(FAC_ROLE),FAC_ROLE!="chief") %>%
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
   mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
   group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
@@ -1203,10 +1226,9 @@ journal_board_analysis.tbl %>%
     ) %>% 
     gt_theme_538() 
 
-
 journal_board_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
-  
+  filter(!is.na(FAC_ROLE),FAC_ROLE!="chief") %>%
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
   mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
   group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
@@ -1229,22 +1251,45 @@ journal_board_analysis.tbl %>%
         domain = c(0,1) ) 
     ) %>% 
     gt_theme_538() 
-
-
-
-journal_board_analysis.tbl %>% 
+```
+```{r field-diag}
+# Field Level Diagnostics
+journal_diag.tbl <- journal_board_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE),!is.na(FAC_TOP)) %>%
+  filter(FAC_ROLE!="chief") %>%
    unnest(LIST_SUBJECTS) %>% 
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
   mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
   group_by(IND_OPEN,FAC_ROLE,IND_TOP,LABEL_SUBJECT) %>%
   summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE),prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
   ungroup() %>%
-  pivot_wider(values_from=c(ihhi,prop_female), names_from=IND_OPEN) %>%
+  pivot_wider(values_from=c(ihhi,prop_female), names_from=IND_OPEN) 
+
+subjectweights.tbl <- journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE),!is.na(FAC_TOP)) %>%
+  unnest(LIST_SUBJECTS) %>% 
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
+  group_by(IND_OPEN,IND_TOP,LABEL_SUBJECT) %>%
+  summarize( n_entries = n()) %>%
+  group_by(IND_TOP,IND_OPEN) %>% 
+  mutate(tot_entries=sum(n_entries,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  mutate(prop_entries=n_entries/tot_entries) %>%
+  select(-tot_entries,-n_entries) %>%
+  pivot_wider(values_from=c(prop_entries), names_from=IND_OPEN, values_fill=0,names_prefix="weight_")  
+  
+left_join(journal_diag.tbl,subjectweights.tbl) %>%
   group_by(IND_TOP) %>%
   gt() %>% 
     fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board International Diversity by OA and TOPS status") %>%
+    tab_header(title="Board International Diversity by Field OA and TOPS status") %>%
+    cols_label( "prop_female_TRUE" = "OPEN",
+                "prop_female_FALSE" = "CLOSED",
+                  "ihhi_TRUE"="OPEN",
+                  "ihhi_FALSE"="CLOSED") %>% 
+    tab_spanner(columns=matches("prop_female"), label="Proportion Female") %>%
+       tab_spanner(columns=matches("ihhi_"), label="Country Diversity") %>%
     data_color (
       columns = matches("FALSE|TRUE"), 
       colors = scales::col_numeric( 
@@ -1254,9 +1299,60 @@ journal_board_analysis.tbl %>%
   gt_theme_538() 
 
 
+journal_diag.tbl %>% 
+  rowwise() %>% 
+  mutate(country_open_diff = (ihhi_TRUE>ihhi_FALSE),
+         female_open_diff = prop_female_TRUE>prop_female_FALSE) %>%
+  ungroup() %>%
+  summarise(country_open_pos_prop=mean(country_open_diff, na.rm=TRUE),
+            female_open_pos_prop=mean(female_open_diff, na.rm=TRUE))
+
+
+
 
 
 ```
+```{r chief-editor-pool}
+# Chief Editor Pool Analysis
+chief_pool.tbl <- journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE),!is.na(FAC_TOP)) %>%
+  filter(FAC_ROLE=="chief") %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) 
+
+ left_join (
+  chief_pool.tbl %>% 
+  unnest(LIST_ROLEGROUP_PROPENSITY_MALE) %>%
+  group_by(IND_OPEN,IND_TOP) %>%
+  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+  ungroup(),
+  chief_pool.tbl %>% 
+  unnest(LIST_ROLEGROUP_COUNTRIES) %>%
+  group_by(IND_OPEN,IND_TOP) %>%
+  summarize(ihhi = 1-countries_to_hhi(COUNTRIES))
+ ) %>%
+  pivot_wider(values_from=c(prop_female,ihhi), names_from=IND_OPEN,  
+              ) %>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    fmt_percent(columns=matches("FALSE|TRUE"), decimals=0) %>%
+    cols_label( "prop_female_TRUE" = "OPEN",
+                "prop_female_FALSE" = "CLOSED",
+                  "ihhi_TRUE"="OPEN",
+                  "ihhi_FALSE"="CLOSED"
+                ) %>%
+    tab_header(title="Chief Editor Pool Diversity by OA and TOPS status") %>%
+    tab_spanner(columns=matches("prop_female"), label="Proportion Female") %>%
+       tab_spanner(columns=matches("ihhi_"), label="Country Diversity") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+  gt_theme_538() 
+```
+
 ```{r}
 
 tmp <- journal_board_analysis.tbl %>% 
