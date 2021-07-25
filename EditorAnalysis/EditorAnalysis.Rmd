@@ -1308,7 +1308,19 @@ journal_diag.tbl %>%
             female_open_pos_prop=mean(female_open_diff, na.rm=TRUE))
 
 
+left_join(journal_diag.tbl,subjectweights.tbl) %>%
+  group_by(IND_TOP,FAC_ROLE) %>% 
+  summarise(ihhi_CLOSED= mean(ihhi_FALSE,na.rm=TRUE),
+            ihhi_OPEN=mean(ihhi_TRUE,na.rm=TRUE),
+            ihhi_OPEN_WT=weighted.mean(ihhi_TRUE,weight_FALSE,na.rm=TRUE)) %>%
+  gt()
 
+left_join(journal_diag.tbl,subjectweights.tbl) %>%
+  group_by(IND_TOP,FAC_ROLE) %>% 
+  summarise(fem_CLOSED=mean(prop_female_FALSE,na.rm=TRUE),
+            fem_OPEN=mean(prop_female_TRUE,na.rm=TRUE),
+            fem_OPEN_WT=weighted.mean(prop_female_TRUE,weight_FALSE,na.rm=TRUE)) %>%
+  gt()
 
 
 ```
@@ -1356,18 +1368,22 @@ chief_pool.tbl <- journal_board_analysis.tbl %>%
 ```{r}
 
 tmp <- journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
-  mutate(IND_TOP=(FAC_TOP>"no TOP"))
+  filter(!is.na(FAC_ROLE), FAC_ROLE!="chief") %>%
+  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
+  mutate(International=1-PERCENT_HHI,
+         Female=1-PROPENSITY_ROLEGROUP_MALE,
+         OA=IND_OPEN,
+         TOP=IND_TOP)
 p1<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_OPEN)
 p2<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
 p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
 p4<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
 plot((p1+p2)/(p3+p4))
 
-p1<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_OPEN)
-p2<- tmp %>% gf_dens2(~1-PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_OPEN)
-p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
-p4<- tmp %>% gf_dens2(~1-PROPENSITY_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
+p1<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~OA)
+p2<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~OA)
+p3<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~TOP)
+p4<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~TOP)
 plot((p1+p2)/(p3+p4))
 
 #TODO: Compare HHI index aggregate
