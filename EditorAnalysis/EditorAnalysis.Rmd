@@ -50,9 +50,7 @@ if (doc_is_pdf) {
 }
 # works in knit, but not in other environments
 try(knitr::dep_auto())
-```
 
-```{r r-setup, include=FALSE}
 # core libraries
 library("tidyverse")
 library("magrittr")
@@ -945,7 +943,16 @@ journal_analysis.tbl %>%
       colors = scales::col_numeric( 
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
-    ) 
+    ) -> tb1.gt
+
+tb1.gt 
+tb1.gt %>% gtsave(filename="tb1.htm")
+tb1.gt %>% gtsave(filename="tb1.pdf")
+tb1.gt %>% gtsave(filename="tb1.png")
+tb1.gt %>% gtsave(filename="tb1.rtf")
+
+
+
 
 ```
 
@@ -985,7 +992,12 @@ editors_analysis.tbl %<>% mutate(LS_COUNTRY_U = ifelse(is.na(LS_COUNTRY),"Unknow
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() 
+    gt_theme_538()  -> tb2.gt
+ 
+ tb2.gt
+ tb2.gt %>% gtsave(file="tb2.htm",inline_css=TRUE)
+  tb2.gt %>% gtsave(file="tb2_1.htm",inline_css=FALSE)
+
   
  
  # percentage of 20 countries
@@ -1015,11 +1027,18 @@ editors_analysis.tbl %>% slice_sample(n=1000) %>% gf_percents(~FAC_ROLE,fill=~LS
 ### Fig: Board interconnectivity
 ```{r figure-interconnect}
 
-journals.grViz <- journals_linked.graph %>% render_graph(output="visNetwork")
+#journals.grViz <- journals_linked.graph %>% render_graph(output="visNetwork")
 
-journals_linked.tgraph %>% ggraph(layout="stress") +
+journals_linked.tgraph %>%
+  activate(nodes) %>%
+  mutate(Publisher=factor(CAT_PUBLISHER)) %>%
+  ggraph(layout="stress") +
     geom_edge_fan(alpha=.2) +
-    geom_node_point(aes(color=factor(CAT_PUBLISHER))) + scale_color_viridis_d()
+    geom_node_point(mapping=aes(color=Publisher)) +
+                      scale_color_viridis_d() + theme(legend.position ="bottom") -> fig5
+
+fig5
+fig5 %>% ggsave(plot=., filename="figure_5.png" , units="in", width=7, height=7,scale=2)
   
 ```
 # Sec 4.2 Correlates of Diversity
@@ -1099,9 +1118,12 @@ subj_order <-  boardDiverse.tbl %>%
     facet_wrap(facets=vars(divtype)) +
      labs(x = "Diversity", y="",
        title = "Board diversity by journal discipline and role",
-       color = "Role", caption="Note: Chief editors are pooled across discipline.") 
+       color = "Role", caption="Note: Chief editors are pooled across discipline.") -> fig3
+       fig3
+       
+       fig3 %>% ggsave(plot=., filename="figure_3.png" , units="in", width=7,height=3.5,scale=2)
 
-
+       
 
 
 ```
@@ -1224,7 +1246,10 @@ journal_board_analysis.tbl %>%
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() 
+    gt_theme_538()  -> tb3a.gt
+
+tb3a.gt
+tb3a.gt %>% gtsave("tb3a.htm",inline_css=FALSE)
 
 journal_board_analysis.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
@@ -1250,7 +1275,11 @@ journal_board_analysis.tbl %>%
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() 
+    gt_theme_538() ->  tb3b.gt
+tb3b.gt %>% gtsave("tb3b.htm",inline_css=FALSE)
+
+
+
 ```
 ```{r field-diag}
 # Field Level Diagnostics
@@ -1362,7 +1391,10 @@ chief_pool.tbl <- journal_board_analysis.tbl %>%
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-  gt_theme_538() 
+  gt_theme_538() -> tb3c.gt
+ tb3c.gt
+ tb3c.gt %>% gtsave("tb3c.htm",inline_css=FALSE)
+  
 ```
 
 ```{r}
@@ -1380,11 +1412,16 @@ p3<- tmp %>% gf_dens2(~PERCENT_HHI|FAC_ROLE,fill=~IND_TOP)
 p4<- tmp %>% gf_dens2(~PERCENT_ROLEGROUP_MALE|FAC_ROLE,fill=~IND_TOP)
 plot((p1+p2)/(p3+p4))
 
-p1<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~OA)
-p2<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~OA)
-p3<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~TOP)
-p4<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~TOP)
-plot((p1+p2)/(p3+p4))
+p1<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~OA) + theme(legend.position="") + labs(x="")
+p2<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~OA)+ labs(y="") + labs(x="")
+p3<- tmp %>% gf_dens2(~International|FAC_ROLE,fill=~TOP)+ theme(legend.position="") 
+p4<- tmp %>% gf_dens2(~Female|FAC_ROLE,fill=~TOP)+ labs(y="")
+(p1+p2)/(p3+p4) -> fig4
+
+fig4
+
+fig4 %>% ggsave(plot=., filename="figure_4.png" , units="in", width=7,height=3.5,scale=2)
+
 
 #TODO: Compare HHI index aggregate
 ```
@@ -1419,7 +1456,9 @@ jcomp.sizes %>% unlist %>%  as.tibble %>% group_by(value) %>%
   count %>% ungroup %>% pivot_wider(names_from=value,values_from=n) %>%
   gt %>% 
     tab_header(title="Distribution of Editorial Board Clusters") %>%
-    gt_theme_538() 
+    gt_theme_538()  -> tb5.gt
+tb5.gt
+tb5.gt %>% gtsave("tb5.htm",inline_css=FALSE)
 
 clustjournals.tib <- jcomp.tib.list[which(jcomp.sizes>20)] %>% map_dfr(~.x)
 clustjournals_all.tib <- jcomp.tib.list[which(jcomp.sizes>2)] %>% map_dfr(~.x)
@@ -1441,7 +1480,12 @@ clustjournals_all.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
    gt %>% 
     cols_label(n="Number of journals",nn="") %>%
     tab_header(title="Number of journals served by repeat editors") %>%
-    gt_theme_538()
+    gt_theme_538() -> tb4.gt
+
+ tb4.gt %>% gtsave(file="tb4.htm",inline_css=TRUE)
+  tb4.gt %>% gtsave(file="tb4_1.htm",inline_css=TRUE)
+
+
 
 clustjournals_all.tib %>% unnest(LIST_EDID) %>% count(LIST_EDID,sort=TRUE) %>%
    count(n) %>% 
