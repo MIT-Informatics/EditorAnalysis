@@ -817,9 +817,9 @@ library(extrafont)
 
 import_simpsons() ## shows location of font for installation
 loadfonts()
-theme_set(theme_simpsons(text.font="Akbar"))
+#theme_set(theme_simpsons(text.font="Akbar"))
 theme_set(theme_fivethirtyeight(base_size = 12, base_family = "sans"))
-theme_set(theme_tufte(base_size = 11, base_family = "serif", ticks = TRUE))
+#theme_set(theme_tufte(base_size = 11, base_family = "serif", ticks = TRUE))
 
 
 scale_color_my_cont <- function(...) {
@@ -919,7 +919,6 @@ journal_analysis.tbl  %>% gf_bar(~fct_infreq(CAT_PUBLISHER)) + aes(x=desc(CAT_PU
 ```{r table-journal-publisher}
 
 journal_analysis.tbl %>%
-  unnest(LIST_SUBJECTS) %>% 
   group_by(CAT_PUBLISHER) %>% 
   summarize(n_journal=n(),
          p_oa = sum(IND_OPEN,na.rm=TRUE)/sum(!is.na(IND_OPEN)),
@@ -951,6 +950,9 @@ tb1.gt %>% gtsave(filename="tb1.pdf")
 tb1.gt %>% gtsave(filename="tb1.png")
 tb1.gt %>% gtsave(filename="tb1.rtf")
 
+journal_analysis.tbl %>% filter(CAT_PUBLISHER=="PLOS")
+
+editors_analysis.tbl %>% filter(CAT_PUBLISHER=="PLOS") %>% count(NM_JOURNAL)
 
 
 
@@ -1035,10 +1037,10 @@ journals_linked.tgraph %>%
   ggraph(layout="stress") +
     geom_edge_fan(alpha=.2) +
     geom_node_point(mapping=aes(color=Publisher)) +
-                      scale_color_viridis_d() + theme(legend.position ="bottom") -> fig5
+                      scale_color_viridis_d() + theme(legend.position ="bottom") -> fig6
 
-fig5
-fig5 %>% ggsave(plot=., filename="figure_5.png" , units="in", width=7, height=7,scale=2)
+fig6
+fig6 %>% ggsave(plot=., filename="figure_6.png" , units="in", width=7, height=7,scale=2)
   
 ```
 # Sec 4.2 Correlates of Diversity
@@ -1127,160 +1129,228 @@ subj_order <-  boardDiverse.tbl %>%
 
 
 ```
-```{r}
 
 
-journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
-  group_by(IND_OPEN,FAC_ROLE) %>%
-  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+```{r board-comparisons-ci}
+library(rsample)
+
+# compute HHI
+countries_to_hhi<-function(x) {
+  safe_hhi <- possibly(hhi,otherwise=NA)
+  if (!inherits(x,"data.frame")) {
+    x <- tibble(COUNTRIES=x)
+  }
+  counts <- 
+    x %>% group_by(COUNTRIES) %>% 
+    count() %>% na.omit %>%
+    ungroup() %>% mutate(total=sum(n)) %>%
+    rowwise() %>% transmute(s=round((n*100)/total)) %>% data.frame()
+  
+  if (nrow(counts)==0) {
+        retval <- NA
+  } else {
+    retval <- suppressWarnings( safe_hhi(counts)/10000 )
+  }
+  retval
+}
+
+
+countries_to_hhi_ci_rs <- function(x, rep=1000) {
+  if (!inherits(x,"data.frame")) {
+    x <- tibble(COUNTRIES=x)
+  }
+  est <- countries_to_hhi(x)
+
+  hhi_split <- function(split, ...) {
+    res <- split %>% analysis() %>% countries_to_hhi()
+   tibble(
+    term = "hhi",
+    estimate = res,
+    std.error = NA_real_ # unknown
+  )
+ }
+  
+  y<- x %>%
+    bootstraps( times = rep, apparent = TRUE) %>%
+    mutate(models = map(splits, function(x) hhi_split(x)))
+  res <- int_bca(y,models,.fn=hhi_split)
+  tibble(y=est,ymin=res$.lower, ymax=res$.upper)
+}
+
+journal_board_analysis_m.tbl <-
+  journal_board_analysis.tbl %>% 
   ungroup() %>%
-  pivot_wider(values_from=prop_female, names_from=IND_OPEN) %>%
-  gt() %>% 
-    cols_label( 
-                "FAC_ROLE"="",
-                "FALSE"="Closed Access" , 
-                "TRUE"="Open Access",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board Proportion Female by OA   status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
-
-
-journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
-  group_by(IND_OPEN,FAC_ROLE) %>%
-  summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE)) %>%
-  ungroup() %>%
-  pivot_wider(values_from=ihhi, names_from=IND_OPEN) %>%
-  gt() %>% 
-    cols_label( 
-                "FAC_ROLE"="",
-                "FALSE"="Closed Access" , 
-                "TRUE"="Open Access",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board International Diversity by OA  status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
-
-journal_board_analysis.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>% 
   mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  mutate(IND_TOP=ifelse(IND_TOP,"TRUE","FALSE")) %>%
-  filter(!is.na(FAC_ROLE)) %>%
-  group_by(IND_TOP,FAC_ROLE) %>%
-  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
-  ungroup() %>%
-  pivot_wider(values_from=prop_female, names_from=IND_TOP) %>%
-  gt() %>% 
-    cols_label( 
-                "FAC_ROLE"="",
-                "FALSE"="Not Open Science" , 
-                "TRUE"="Open Science",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board Proportion Female by TOPS  status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
+  mutate(IND_TOP = factor(IND_TOP)) %>%
+  mutate(IND_OPEN = factor(IND_OPEN)) %>%
+  mutate(FEMALE = 1-PROPENSITY_ROLEGROUP_MALE, INTERNATIONAL = 1-PERCENT_HHI) %>%
+  select(FAC_ROLE,IND_TOP,IND_OPEN,FEMALE,INTERNATIONAL,LIST_ROLEGROUP_PROPENSITY_MALE, LIST_ROLEGROUP_COUNTRIES)
 
-journal_board_analysis.tbl %>% 
-  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  mutate(IND_TOP=ifelse(IND_TOP,"TRUE","FALSE")) %>%
-  filter(!is.na(FAC_ROLE)) %>%
-  group_by(IND_TOP,FAC_ROLE) %>%
-  summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE)) %>%
-  ungroup() %>%
-  pivot_wider(values_from=ihhi, names_from=IND_TOP) %>%
-  gt() %>% 
-    cols_label( 
-                "FAC_ROLE"="",
-                "FALSE"="Not Open Science" , 
-                "TRUE"="Open Science",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board International Diversity by TOPS  status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538() 
+# pool chief editors across field for diversity calculation
+boardChief_f.tbl <- journal_board_analysis_m.tbl %>%
+  filter(FAC_ROLE=="chief") %>% 
+  mutate(FAC_ROLE="chief-pooled") %>%
+  unnest(LIST_ROLEGROUP_PROPENSITY_MALE) %>%
+  mutate(FEMALE=1-LIST_ROLEGROUP_PROPENSITY_MALE) %>%
+  group_by(FAC_ROLE, IND_OPEN,IND_TOP) %>%
+  summarize(res= mean_cl_boot(FEMALE,na.rm=TRUE), group_n=n()) %>%
+  unpack(res) %>%
+  ungroup()
 
-journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE),FAC_ROLE!="chief") %>%
-  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
-  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
-  summarize(prop_female = 1-mean(PROPENSITY_ROLEGROUP_MALE,na.rm=TRUE)) %>%
+boardChief_i.tbl <- journal_board_analysis_m.tbl %>%
+  filter(FAC_ROLE=="chief") %>% 
+  mutate(FAC_ROLE="chief-pooled") %>%
+  unnest(LIST_ROLEGROUP_COUNTRIES) %>%
+  group_by(FAC_ROLE, IND_OPEN,IND_TOP) %>% 
+  summarize(res = countries_to_hhi_ci_rs(COUNTRIES), group_n=n()) %>%
+  unpack("res") %>%
+  mutate(y=1-y,ymin=1-ymin,ymax=1-ymax) %>%
+  ungroup()
+
+journal_board_analysis_m.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  group_by(FAC_ROLE,IND_OPEN,IND_TOP) %>%
+  summarize( res = mean_cl_boot(INTERNATIONAL,na.rm=TRUE),group_n=n()) %>% 
+  unpack(res) %>%
   ungroup() %>%
-  pivot_wider(values_from=prop_female, names_from=IND_OPEN) %>%
+  bind_rows(boardChief_i.tbl) %>%
+  mutate(IND_TOP=fct_recode(IND_TOP, 
+        "TOP Open Science"="TRUE", "Not Open Science"="FALSE"),
+         measure = "MULTINATIONAL") -> board_i.tbl
+
+journal_board_analysis_m.tbl %>% 
+  filter(!is.na(FAC_ROLE)) %>%
+  group_by(FAC_ROLE,IND_OPEN,IND_TOP) %>%
+  summarize( res = mean_cl_boot(FEMALE,na.rm=TRUE),group_n=n()) %>% 
+  unpack(res) %>%
+  ungroup() %>%
+  bind_rows(boardChief_f.tbl) %>%
+  mutate(IND_TOP=fct_recode(IND_TOP, 
+        "TOP Open Science"="TRUE", "Not Open Science"="FALSE"),
+         measure = "FEMALE") -> board_f.tbl
+
+ board_i.tbl %>%
+  pivot_wider(values_from=c("y","ymin","ymax","group_n"), names_from=IND_OPEN)%>%
   group_by(IND_TOP) %>%
   gt() %>% 
     cols_label( "IND_TOP" = "Top Signatory",
                 "FAC_ROLE"="",
-                "FALSE"="Closed Access" , 
-                "TRUE"="Open Access",
+                "y_FALSE"="mean" , 
+                "y_TRUE"="mean",
                 ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
-    tab_header(title="Board Proportion Female by OA and TOPS status") %>%
-    data_color (
-      columns = matches("FALSE|TRUE"), 
-      colors = scales::col_numeric( 
-      palette = c( "white","orange"), 
-        domain = c(0,1) ) 
-    ) %>% 
-    gt_theme_538()  -> tb3a.gt
-
-tb3a.gt
-tb3a.gt %>% gtsave("tb3a.htm",inline_css=FALSE)
-
-journal_board_analysis.tbl %>% 
-  filter(!is.na(FAC_ROLE)) %>%
-  filter(!is.na(FAC_ROLE),FAC_ROLE!="chief") %>%
-  mutate(IND_TOP=(FAC_TOP>"no TOP")) %>%
-  mutate(IND_TOP=ifelse(IND_TOP,"TOP Open Science","Not Open Science")) %>%
-  group_by(IND_OPEN,FAC_ROLE,IND_TOP) %>%
-  summarize( ihhi = 1-mean(PERCENT_HHI,na.rm=TRUE)) %>%
-  ungroup() %>%
-  pivot_wider(values_from=ihhi, names_from=IND_OPEN) %>%
-  group_by(IND_TOP) %>%
-  gt() %>% 
-    cols_label( "IND_TOP" = "Top Signatory",
-                "FAC_ROLE"="",
-                "FALSE"="Closed Access" , 
-                "TRUE"="Open Access",
-                ) %>%
-    fmt_percent(columns=matches("FALSE|TRUE"),decimals=0) %>%
+    cols_hide(measure) %>%
+    tab_spanner("Open Access",columns = ends_with("_TRUE")) %>%
+    tab_spanner("Closed Access",columns = ends_with("_FALSE")) %>%
+    cols_merge_range("ymin_TRUE","ymax_TRUE") %>%
+    cols_label(ymin_TRUE="(95% CI)") %>%
+      cols_label(ymin_FALSE="(95% CI)") %>%
+    cols_label(group_n_TRUE="(n)") %>%
+      cols_label(group_n_FALSE="(n)") %>%
+    cols_merge_range("ymin_FALSE","ymax_FALSE") %>%
+    fmt_percent(columns=matches("mean|ymin|ymax"),decimals=0) %>%
     tab_header(title="Board International Diversity by OA and TOPS status") %>%
+    tab_source_note("Note: Diversity measures are computed per-board for editorial and review boards, and pooled for chief-editor roles.") %>%
     data_color (
       columns = matches("FALSE|TRUE"), 
       colors = scales::col_numeric( 
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() ->  tb3b.gt
-tb3b.gt %>% gtsave("tb3b.htm",inline_css=FALSE)
-
+    gt_theme_538() -- tba1.gt
+ 
+ tba1.gt
+ 
+ board_f.tbl %>%
+  pivot_wider(values_from=c("y","ymin","ymax","group_n"), names_from=IND_OPEN)%>%
+  group_by(IND_TOP) %>%
+  gt() %>% 
+    cols_label( "IND_TOP" = "Top Signatory",
+                "FAC_ROLE"="",
+                "y_FALSE"="mean" , 
+                "y_TRUE"="mean",
+                ) %>%
+    cols_hide(measure) %>%
+    tab_spanner("Open Access",columns = ends_with("_TRUE")) %>%
+    tab_spanner("Closed Access",columns = ends_with("_FALSE")) %>%
+    cols_merge_range("ymin_TRUE","ymax_TRUE") %>%
+    cols_label(ymin_TRUE="(95% CI)") %>%
+      cols_label(ymin_FALSE="(95% CI)") %>%
+    cols_label(group_n_TRUE="(n)") %>%
+      cols_label(group_n_FALSE="(n)") %>%
+    cols_merge_range("ymin_FALSE","ymax_FALSE") %>%
+    fmt_percent(columns=matches("mean|ymin|ymax"),decimals=0) %>%
+    tab_header(title="Board Gender Diversity by OA and TOPS status") %>%
+    tab_source_note("Note: Diversity measures are computed per-board for editorial and review boards, and pooled for chief-editor roles.") %>%
+    data_color (
+      columns = matches("FALSE|TRUE"), 
+      colors = scales::col_numeric( 
+      palette = c( "white","orange"), 
+        domain = c(0,1) ) 
+    ) %>% 
+    gt_theme_538() --> tba2.gt
+ 
+ tba2.gt
+ 
+ tba1.gt %>% gtsave("tba1.htm",inline_css=FALSE)
+ tba2.gt %>% gtsave("tba1.htm",inline_css=FALSE)
 
 
 ```
+
+```{r board-comparisons-fig}
+boardn <- dim(journal_board_analysis_m.tbl)[[1]]
+bind_rows(board_f.tbl,board_i.tbl) %>%
+  mutate(  IND_OPEN=fct_recode(IND_OPEN, 
+        "Open Access"="TRUE", "Closed Access"="FALSE")) %>%
+  ggplot(aes(x=fct_relevel(FAC_ROLE,"chief","editor","review"),
+             y=y, colour=IND_OPEN)) + 
+    geom_errorbar(aes(ymin=ymin, ymax=ymax)) +
+    geom_point(aes(size=group_n)) +
+    #geom_label(aes(label=round(y,digits = 2)), size=2) +
+    facet_grid(cols=vars(IND_TOP), rows=vars(measure), scales="free_y") +
+    labs(y="Diversity",x="",title="Diversity of Journal Boards",
+         caption = str_wrap(paste0("Bars represent 95% CI. Diversity is mean of individual boards. Pooled-Chief shows diversity of entire category pool. ", "N = ", boardn),100))+
+  theme(legend.title = element_blank()) -> fig5
+
+fig5 %>% ggsave(plot=., filename="figure_5.png" , units="in", width=7,height=3.5,scale=2)
+```
+
+
+```{r board-comparisonaov-appendix}
+library(broom)
+board_cmp_aovs.tbl <- pmap_dfr (
+  expand_grid( role=levels(journal_board_analysis_m.tbl$FAC_ROLE),
+               dep=c("FEMALE","INTERNATIONAL")) ,
+  function(role,dep) {
+     journal_board_analysis_m.tbl %>%
+           filter(FAC_ROLE == {{role}} ) %>%
+           aov(data=., FEMALE  ~  IND_TOP + IND_OPEN ) %>% 
+           tidy %>% mutate(ROLE=role, DEP = {{dep}} ) %>% relocate(DEP,ROLE)
+  }
+)
+
+board_cmp_aovs.tbl %>% filter(term!="Residuals") %>% select(-df,-sumsq,-meansq) %>%
+  mutate(term=factor(term,levels=c("IND_TOP","IND_OPEN"), labels=c("TOP Open Science","Open Access"))) %>%
+  group_by(ROLE, DEP) %>% gt %>%
+  cols_label( "p.value" = "P-Value",
+              "statistic"="Estimate",
+              "term"=""
+                ) %>%
+   fmt_number("statistic", decimals=2) %>%
+     fmt("p.value",
+          fns = function(x) { paste0("p=", signif(x,3)) }
+         ) %>%
+    tab_header(title="TOP Open Science and Open Access as a predictor of diversity") %>%
+    tab_source_note("Note: Separate ANOVA's are run for each editorial board and index of diversity.") %>%
+    gt_theme_538()-> aovtb.gt
+
+ aovtb.gt
+ aovtb.gt %>% gtsave("tba1.htm",inline_css=FALSE)
+
+```
+
+
 ```{r field-diag}
 # Field Level Diagnostics
 journal_diag.tbl <- journal_board_analysis.tbl %>% 
