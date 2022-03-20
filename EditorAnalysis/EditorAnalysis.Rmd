@@ -520,7 +520,7 @@ editors_parse_c.tbl %<>% left_join(affiliations.tbl  %>% select("affiliation","L
       str_detect(rolec,"Associate Editor") ~ "editor",
       str_detect(rolec,"Assistant Editor") ~ "editor",
       str_detect(rolec,"Senior Editor") ~ "editor",
-      str_detect(rolec,"Book Review") ~ "editor",
+      str_detect(rolec,"Book Review") ~ "editor",F
       str_detect(rolec,"Academic Editor") ~ "review",
       str_detect(rolec,"Review Editor") ~ "review",
       str_detect(rolec,"Editorial Board") ~ "review",
@@ -1205,8 +1205,8 @@ boardChief_i.tbl <- journal_board_analysis_m.tbl %>%
   group_by(FAC_ROLE, IND_OPEN,IND_TOP) %>% 
   summarize(res = countries_to_hhi_ci_rs(COUNTRIES), group_n=n()) %>%
   unpack("res") %>%
-  mutate(y=1-y,ymin=1-ymin,ymax=1-ymax) %>%
-  ungroup()
+   mutate(y=1-y,oy=ymax, ymax=1-ymin,ymin=1-oy) %>% select(-oy) %>%
+   ungroup()
 
 journal_board_analysis_m.tbl %>% 
   filter(!is.na(FAC_ROLE)) %>%
@@ -1257,9 +1257,11 @@ journal_board_analysis_m.tbl %>%
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() -- tba1.gt
+    gt_theme_538() -> tba1.gt
  
  tba1.gt
+   tba1.gt %>% gtsave("tba1.htm",inline_css=FALSE)
+
  
  board_f.tbl %>%
   pivot_wider(values_from=c("y","ymin","ymax","group_n"), names_from=IND_OPEN)%>%
@@ -1288,12 +1290,11 @@ journal_board_analysis_m.tbl %>%
       palette = c( "white","orange"), 
         domain = c(0,1) ) 
     ) %>% 
-    gt_theme_538() --> tba2.gt
+    gt_theme_538() -> tba2.gt
  
  tba2.gt
- 
- tba1.gt %>% gtsave("tba1.htm",inline_css=FALSE)
- tba2.gt %>% gtsave("tba1.htm",inline_css=FALSE)
+
+ tba2.gt %>% gtsave("tba2.htm",inline_css=FALSE)
 
 
 ```
@@ -1314,6 +1315,8 @@ bind_rows(board_f.tbl,board_i.tbl) %>%
   theme(legend.title = element_blank()) -> fig5
 
 fig5 %>% ggsave(plot=., filename="figure_5.png" , units="in", width=7,height=3.5,scale=2)
+
+fig5
 ```
 
 
